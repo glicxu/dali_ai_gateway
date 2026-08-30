@@ -89,7 +89,7 @@ def test_batch_transcription_is_bounded_and_routed(
     )
     assert response.status_code == 200
     assert response.json()["text"] == "Captured lecture."
-    assert response.json()["model"] == "gpt-4o-mini-transcribe"
+    assert response.json()["model"] == "gemini-3.5-flash-lite"
     assert fake_provider.transcribed_audio == [b"RIFF-private-audio"]
 
 

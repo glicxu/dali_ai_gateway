@@ -172,6 +172,54 @@ def test_gemini_and_ollama_text_adapters() -> None:
     asyncio.run(exercise())
 
 
+def test_gemini_batch_audio_transcription_protocol() -> None:
+    async def exercise() -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            value = json.loads(request.content)
+            parts = value["contents"][0]["parts"]
+            assert "Return only the spoken transcript" in parts[0]["text"]
+            assert parts[1]["inlineData"] == {
+                "mimeType": "audio/wav",
+                "data": "AQI=",
+            }
+            return httpx.Response(
+                200,
+                json={
+                    "candidates": [
+                        {"content": {"parts": [{"text": "Energy is conserved."}]}}
+                    ],
+                    "usageMetadata": {
+                        "promptTokenCount": 7,
+                        "candidatesTokenCount": 4,
+                    },
+                },
+            )
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        gemini = GeminiProvider(
+            api_key="gemini-test-key",
+            base_url="https://generativelanguage.googleapis.com/v1beta",
+            timeout_seconds=5,
+            client=client,
+        )
+
+        result = await gemini.transcribe(
+            model="gemini-3.5-flash-lite",
+            audio=b"\x01\x02",
+            filename="classroom.wav",
+            content_type="audio/wav",
+            source_language="en",
+            terminology_prompt="Physics",
+        )
+
+        assert result.text == "Energy is conserved."
+        assert result.usage.input_tokens == 7
+        assert result.usage.output_tokens == 4
+        await client.aclose()
+
+    asyncio.run(exercise())
+
+
 def test_openai_realtime_translation_protocol() -> None:
     async def exercise() -> None:
         socket = _FakeSocket(

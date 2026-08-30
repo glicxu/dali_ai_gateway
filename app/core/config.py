@@ -20,8 +20,8 @@ DEFAULT_PROFILES: dict[str, dict[str, str]] = {
     },
     "classroom.transcription.economy": {
         "capability": "audio_transcription",
-        "provider": "openai",
-        "model": "gpt-4o-mini-transcribe",
+        "provider": "gemini",
+        "model": "gemini-3.5-flash-lite",
     },
     "classroom.transcription.live": {
         "capability": "realtime_transcription",

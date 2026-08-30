@@ -13,7 +13,7 @@ from websockets.asyncio.client import connect as websocket_connect
 
 from app.core.errors import PROVIDER_UNAVAILABLE
 from app.models import UsageMeasurement
-from app.providers.base import RealtimeEvent, TextResult
+from app.providers.base import RealtimeEvent, TextResult, TranscriptionResult
 
 
 class GeminiProvider:
@@ -68,6 +68,67 @@ class GeminiProvider:
         usage = value.get("usageMetadata", {})
         return TextResult(
             output=output.strip(),
+            usage=UsageMeasurement(
+                input_tokens=_int(usage.get("promptTokenCount")),
+                output_tokens=_int(usage.get("candidatesTokenCount")),
+            ),
+        )
+
+    async def transcribe(
+        self,
+        *,
+        model: str,
+        audio: bytes,
+        filename: str,
+        content_type: str,
+        source_language: str,
+        terminology_prompt: str,
+    ) -> TranscriptionResult:
+        del filename
+        language_instruction = (
+            "Detect the spoken language."
+            if source_language == "auto"
+            else f"The spoken language is {source_language}."
+        )
+        prompt = (
+            "Transcribe the classroom audio faithfully. Return only the spoken "
+            "transcript, without commentary, timestamps, or translation. "
+            f"{language_instruction} Preserve uncertainty rather than inventing "
+            f"words. Terminology context: {terminology_prompt}"
+        )
+        try:
+            response = await self._client.post(
+                f"{self._base_url}/models/{model}:generateContent",
+                headers={"x-goog-api-key": self._api_key},
+                json={
+                    "contents": [
+                        {
+                            "role": "user",
+                            "parts": [
+                                {"text": prompt},
+                                {
+                                    "inlineData": {
+                                        "mimeType": content_type,
+                                        "data": base64.b64encode(audio).decode("ascii"),
+                                    }
+                                },
+                            ],
+                        }
+                    ],
+                    "generationConfig": {"temperature": 0},
+                },
+            )
+            response.raise_for_status()
+            value = response.json()
+            output = value["candidates"][0]["content"]["parts"][0]["text"]
+        except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as error:
+            raise PROVIDER_UNAVAILABLE from error
+        if not isinstance(output, str) or not output.strip():
+            raise PROVIDER_UNAVAILABLE
+        usage = value.get("usageMetadata", {})
+        return TranscriptionResult(
+            text=output.strip(),
+            detected_language=None,
             usage=UsageMeasurement(
                 input_tokens=_int(usage.get("promptTokenCount")),
                 output_tokens=_int(usage.get("candidatesTokenCount")),
