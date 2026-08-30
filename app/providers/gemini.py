@@ -315,7 +315,7 @@ class GeminiRealtimeSession:
                     await self._events.put(
                         RealtimeEvent("error", code="provider_realtime_error")
                     )
-                    continue
+                    return
                 content = value.get("serverContent")
                 if not isinstance(content, dict):
                     continue
@@ -323,6 +323,10 @@ class GeminiRealtimeSession:
                     await self._read_transcription(content)
                 else:
                     await self._read_translation(content)
+            if self._socket is not None:
+                await self._events.put(
+                    RealtimeEvent("error", code="provider_connection_closed")
+                )
         except asyncio.CancelledError:
             raise
         except Exception:

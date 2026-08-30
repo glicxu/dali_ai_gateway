@@ -317,6 +317,11 @@ class OpenAIRealtimeSession:
                     await self._events.put(
                         RealtimeEvent("error", code="provider_realtime_error")
                     )
+                    return
+            if self._socket is not None:
+                await self._events.put(
+                    RealtimeEvent("error", code="provider_connection_closed")
+                )
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -420,6 +425,10 @@ class OpenAIRealtimeTranslationSession:
                 event = _translation_event(value)
                 if event is not None:
                     await self._events.put(event)
+            if self._socket is not None:
+                await self._events.put(
+                    RealtimeEvent("error", code="provider_connection_closed")
+                )
         except asyncio.CancelledError:
             raise
         except Exception:

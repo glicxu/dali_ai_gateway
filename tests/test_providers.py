@@ -92,6 +92,9 @@ def test_openai_text_batch_and_realtime_protocols() -> None:
         }
         assert (await realtime.next_event()).type == "transcript.delta"
         assert (await realtime.next_event()).text == "Final transcript."
+        closed = await realtime.next_event()
+        assert closed.type == "error"
+        assert closed.code == "provider_connection_closed"
         await realtime.append("AQI=")
         await realtime.commit()
         await realtime.clear()
@@ -267,6 +270,9 @@ def test_openai_realtime_translation_protocol() -> None:
         }
         assert (await realtime.next_event()).type == "translation.delta"
         assert (await realtime.next_event()).text == "Guten Tag."
+        closed = await realtime.next_event()
+        assert closed.type == "error"
+        assert closed.code == "provider_connection_closed"
         await realtime.append("AQI=")
         assert socket.sent[-1] == {
             "type": "session.input_audio_buffer.append",
@@ -348,6 +354,9 @@ def test_gemini_live_transcription_and_translation_protocols() -> None:
         ]
         assert (await transcription.next_event()).type == "transcript.delta"
         assert (await transcription.next_event()).text == "Final transcript."
+        closed = await transcription.next_event()
+        assert closed.type == "error"
+        assert closed.code == "provider_connection_closed"
 
         translation = await provider.open_realtime_translation(
             model="gemini-3.5-live-translate-preview",
@@ -368,6 +377,9 @@ def test_gemini_live_transcription_and_translation_protocols() -> None:
         final = await translation.next_event()
         assert final.type == "translation.final"
         assert final.text == "Guten Tag."
+        closed = await translation.next_event()
+        assert closed.type == "error"
+        assert closed.code == "provider_connection_closed"
         assert all("gemini-test-key" in value for value in connections)
         await transcription.close()
         await translation.close()
