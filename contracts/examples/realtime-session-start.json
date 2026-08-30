@@ -1,0 +1,10 @@
+{
+  "type": "session.start",
+  "request_id": "6e2f64ca-0040-45d1-9034-d2ca298f3881",
+  "product": "classroom",
+  "profile": "classroom.transcription.live",
+  "source_language": "en",
+  "terminology_prompt": "Biology lecture terminology",
+  "terminology_keywords": ["ATP synthase", "proton gradient"]
+}
+

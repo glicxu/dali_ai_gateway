@@ -1,0 +1,9 @@
+{
+  "type": "session.start",
+  "request_id": "b2cc4c76-5534-4190-957d-c56585f563bc",
+  "product": "classroom",
+  "profile": "classroom.translation.live",
+  "target_language": "de-DE",
+  "instructions": "Translate the classroom lecture faithfully. Return no added facts."
+}
+

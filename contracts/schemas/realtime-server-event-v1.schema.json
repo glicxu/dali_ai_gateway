@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dalifin.com/contracts/ai-gateway/realtime-server-event-v1.schema.json",
+  "title": "Dali AI Gateway realtime server event v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "request_id", "profile"],
+      "properties": {
+        "type": {"const": "session.ready"},
+        "request_id": {"type": "string", "format": "uuid"},
+        "profile": {"type": "string"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "text"],
+      "properties": {
+        "type": {"enum": ["transcript.delta", "transcript.final", "translation.delta", "translation.final"]},
+        "text": {"type": "string"},
+        "item_id": {"type": "string"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "error"],
+      "properties": {
+        "type": {"const": "error"},
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message", "retryable"],
+          "properties": {
+            "code": {"type": "string"},
+            "message": {"type": "string"},
+            "retryable": {"type": "boolean"}
+          }
+        }
+      }
+    }
+  ]
+}

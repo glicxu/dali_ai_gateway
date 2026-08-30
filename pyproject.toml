@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dali-ai-gateway"
+version = "0.1.0"
+description = "Private, stateless, realtime-capable Dali AI gateway"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "Proprietary" }
+dependencies = [
+  "fastapi==0.115.14",
+  "httpx==0.28.1",
+  "pydantic==2.12.5",
+  "pydantic-settings==2.15.0",
+  "python-multipart==0.0.20",
+  "PyMySQL==1.1.2",
+  "SQLAlchemy==2.0.43",
+  "uvicorn==0.35.0",
+  "websockets==15.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "black==25.1.0",
+  "pytest==8.4.2",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["app*", "scripts*"]

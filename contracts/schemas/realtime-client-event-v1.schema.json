@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dalifin.com/contracts/ai-gateway/realtime-client-event-v1.schema.json",
+  "title": "Dali AI Gateway realtime client event v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "request_id", "product", "profile"],
+      "properties": {
+        "type": {"const": "session.start"},
+        "request_id": {"type": "string", "format": "uuid"},
+        "product": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{1,63}$"},
+        "profile": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{2,127}$"},
+        "source_language": {"type": "string", "minLength": 2, "maxLength": 35},
+        "terminology_prompt": {"type": "string", "maxLength": 2000},
+        "terminology_keywords": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {"type": "string"}
+        },
+        "audio_sample_rate_hz": {"enum": [16000, 24000], "default": 24000}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "request_id", "product", "profile", "target_language"],
+      "properties": {
+        "type": {"const": "session.start"},
+        "request_id": {"type": "string", "format": "uuid"},
+        "product": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{1,63}$"},
+        "profile": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{2,127}$"},
+        "target_language": {"type": "string", "minLength": 2, "maxLength": 35},
+        "instructions": {"type": "string", "maxLength": 20000},
+        "audio_sample_rate_hz": {"enum": [16000, 24000], "default": 24000}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "audio"],
+      "properties": {
+        "type": {"const": "audio.append"},
+        "audio": {"type": "string", "minLength": 1, "contentEncoding": "base64"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {"enum": ["audio.commit", "audio.clear", "session.stop"]}
+      }
+    }
+  ]
+}
