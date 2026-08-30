@@ -152,5 +152,6 @@ def _providers_with_credentials(
             api_key=credentials.gemini,
             base_url=str(settings.gemini_base_url),
             timeout_seconds=settings.request_timeout_seconds,
+            realtime_session_max_seconds=(settings.gemini_realtime_session_max_seconds),
         )
     return providers

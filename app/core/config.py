@@ -71,6 +71,11 @@ class Settings(BaseSettings):
     gemini_api_key: SecretStr | None = None
     ollama_base_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:11434")
     request_timeout_seconds: float = Field(default=60, gt=0, le=120)
+    gemini_realtime_session_max_seconds: float = Field(
+        default=9 * 60,
+        gt=0,
+        le=10 * 60,
+    )
     max_audio_bytes: int = Field(default=10 * 1024 * 1024, ge=1024, le=25 * 1024 * 1024)
 
     @field_validator(

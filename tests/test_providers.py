@@ -388,6 +388,44 @@ def test_gemini_live_transcription_and_translation_protocols() -> None:
     asyncio.run(exercise())
 
 
+def test_gemini_live_session_requests_rotation_before_provider_limit() -> None:
+    async def exercise() -> None:
+        socket = _BlockingFakeSocket()
+
+        async def connect(url: str, **kwargs):
+            return socket
+
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(500, json={"error": "unused"})
+            )
+        )
+        provider = GeminiProvider(
+            api_key="gemini-test-key",
+            base_url="https://generativelanguage.googleapis.com/v1beta",
+            timeout_seconds=5,
+            realtime_session_max_seconds=0.01,
+            client=client,
+            connect=connect,
+        )
+
+        realtime = await provider.open_realtime(
+            model="gemini-3.5-transcribe-live",
+            source_language="en-US",
+            terminology_prompt="",
+            terminology_keywords=(),
+            audio_sample_rate_hz=16000,
+        )
+
+        event = await asyncio.wait_for(realtime.next_event(), timeout=1)
+        assert event.type == "error"
+        assert event.code == "provider_session_rotation_required"
+        await realtime.close()
+        await client.aclose()
+
+    asyncio.run(exercise())
+
+
 class _FakeSocket:
     def __init__(self, incoming: list[dict[str, object]]) -> None:
         self._incoming = incoming
@@ -404,5 +442,27 @@ class _FakeSocket:
         async def values():
             for value in self._incoming:
                 yield json.dumps(value)
+
+        return values()
+
+
+class _BlockingFakeSocket:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, object]] = []
+        self.closed = False
+        self._closed = asyncio.Event()
+
+    async def send(self, value: str) -> None:
+        self.sent.append(json.loads(value))
+
+    async def close(self) -> None:
+        self.closed = True
+        self._closed.set()
+
+    def __aiter__(self):
+        async def values():
+            await self._closed.wait()
+            if False:
+                yield ""
 
         return values()

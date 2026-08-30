@@ -23,6 +23,7 @@ class GeminiProvider:
         api_key: str,
         base_url: str,
         timeout_seconds: float,
+        realtime_session_max_seconds: float = 9 * 60,
         client: httpx.AsyncClient | None = None,
         connect: Callable[..., Awaitable[Any]] = websocket_connect,
     ) -> None:
@@ -31,6 +32,7 @@ class GeminiProvider:
         self._client = client or httpx.AsyncClient(timeout=timeout_seconds)
         self._owns_client = client is None
         self._connect = connect
+        self._realtime_session_max_seconds = realtime_session_max_seconds
 
     async def close(self) -> None:
         if self._owns_client:
@@ -161,6 +163,7 @@ class GeminiProvider:
             },
             audio_sample_rate_hz=audio_sample_rate_hz,
             connect=self._connect,
+            max_duration_seconds=self._realtime_session_max_seconds,
         )
         await session.start()
         return session
@@ -191,6 +194,7 @@ class GeminiProvider:
             },
             audio_sample_rate_hz=audio_sample_rate_hz,
             connect=self._connect,
+            max_duration_seconds=self._realtime_session_max_seconds,
         )
         await session.start()
         return session
@@ -208,6 +212,7 @@ class GeminiRealtimeSession:
         setup_config: dict[str, object],
         audio_sample_rate_hz: int,
         connect: Callable[..., Awaitable[Any]],
+        max_duration_seconds: float,
     ) -> None:
         self._url = url
         self._model = model
@@ -215,9 +220,11 @@ class GeminiRealtimeSession:
         self._setup_config = setup_config
         self._audio_sample_rate_hz = audio_sample_rate_hz
         self._connect = connect
+        self._max_duration_seconds = max_duration_seconds
         self._socket: Any | None = None
         self._events: asyncio.Queue[RealtimeEvent] = asyncio.Queue()
         self._reader: asyncio.Task[None] | None = None
+        self._deadline: asyncio.Task[None] | None = None
         self._rate_state: tuple | None = None
         self._translation = ""
         self._item_number = 1
@@ -234,6 +241,7 @@ class GeminiRealtimeSession:
                 }
             )
             self._reader = asyncio.create_task(self._read_events())
+            self._deadline = asyncio.create_task(self._enforce_deadline())
         except Exception as error:
             await self.close()
             raise PROVIDER_UNAVAILABLE from error
@@ -277,6 +285,11 @@ class GeminiRealtimeSession:
         return await self._events.get()
 
     async def close(self) -> None:
+        deadline = self._deadline
+        self._deadline = None
+        if deadline is not None and deadline is not asyncio.current_task():
+            deadline.cancel()
+            await asyncio.gather(deadline, return_exceptions=True)
         reader = self._reader
         self._reader = None
         if reader is not None and reader is not asyncio.current_task():
@@ -291,6 +304,16 @@ class GeminiRealtimeSession:
                 pass
         self._rate_state = None
         self._translation = ""
+
+    async def _enforce_deadline(self) -> None:
+        try:
+            await asyncio.sleep(self._max_duration_seconds)
+            if self._socket is not None:
+                await self._events.put(
+                    RealtimeEvent("error", code="provider_session_rotation_required")
+                )
+        except asyncio.CancelledError:
+            raise
 
     async def _send(self, value: dict[str, object]) -> None:
         if self._socket is None:
