@@ -106,7 +106,9 @@ def router_for(container: Container) -> APIRouter:
                 start = RealtimeStart.model_validate(await websocket.receive_json())
             except (ValidationError, ValueError, TypeError):
                 raise REQUEST_INVALID
-            async with container.service.admission.lease(caller):
+            async with container.service.admission.lease(
+                caller, "realtime_transcription"
+            ):
                 session = await container.service.open_realtime(
                     caller=caller, request=start
                 )
@@ -145,7 +147,9 @@ def router_for(container: Container) -> APIRouter:
                 )
             except (ValidationError, ValueError, TypeError):
                 raise REQUEST_INVALID
-            async with container.service.admission.lease(caller):
+            async with container.service.admission.lease(
+                caller, "realtime_translation"
+            ):
                 session = await container.service.open_realtime_translation(
                     caller=caller, request=start
                 )

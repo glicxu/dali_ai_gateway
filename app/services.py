@@ -21,21 +21,26 @@ from app.providers.registry import ProviderRegistry
 class AdmissionController:
     def __init__(self, caller_limits: dict[str, int]) -> None:
         self._limits = dict(caller_limits)
-        self._active: defaultdict[str, int] = defaultdict(int)
+        self._active: defaultdict[tuple[str, str], int] = defaultdict(int)
         self._lock = asyncio.Lock()
 
     @asynccontextmanager
-    async def lease(self, caller: str) -> AsyncIterator[None]:
+    async def lease(
+        self, caller: str, capability: str = "default"
+    ) -> AsyncIterator[None]:
+        key = (caller, capability)
         async with self._lock:
-            limit = self._limits.get(caller, 1)
-            if self._active[caller] >= limit:
+            limit = self._limits.get(
+                f"{caller}:{capability}", self._limits.get(caller, 1)
+            )
+            if self._active[key] >= limit:
                 raise CAPACITY_EXCEEDED
-            self._active[caller] += 1
+            self._active[key] += 1
         try:
             yield
         finally:
             async with self._lock:
-                self._active[caller] = max(0, self._active[caller] - 1)
+                self._active[key] = max(0, self._active[key] - 1)
 
 
 class GatewayService:
@@ -57,7 +62,7 @@ class GatewayService:
             capability="text_generation",
         )
         provider = self.registry.text_provider(raw_provider)
-        async with self.admission.lease(caller):
+        async with self.admission.lease(caller, "text_generation"):
             result = await provider.generate(
                 model=profile.model,
                 system_instruction=request.system_instruction,
@@ -95,7 +100,7 @@ class GatewayService:
             capability="audio_transcription",
         )
         provider = self.registry.transcription_provider(raw_provider)
-        async with self.admission.lease(caller):
+        async with self.admission.lease(caller, "audio_transcription"):
             result = await provider.transcribe(
                 model=profile.model,
                 audio=audio,
