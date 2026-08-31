@@ -223,6 +223,42 @@ def test_gemini_batch_audio_transcription_protocol() -> None:
     asyncio.run(exercise())
 
 
+def test_gemini_batch_no_speech_is_live_feedback_not_provider_failure() -> None:
+    async def exercise() -> None:
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(
+                    200,
+                    json={
+                        "candidates": [{"content": {"parts": []}}],
+                        "usageMetadata": {"promptTokenCount": 3},
+                    },
+                )
+            )
+        )
+        gemini = GeminiProvider(
+            api_key="gemini-test-key",
+            base_url="https://generativelanguage.googleapis.com/v1beta",
+            timeout_seconds=5,
+            client=client,
+        )
+
+        result = await gemini.transcribe(
+            model="gemini-3.5-flash-lite",
+            audio=b"\x00\x00",
+            filename="classroom.wav",
+            content_type="audio/wav",
+            source_language="auto",
+            terminology_prompt="",
+        )
+
+        assert result.text == "<no audio>"
+        assert result.usage.input_tokens == 3
+        await client.aclose()
+
+    asyncio.run(exercise())
+
+
 def test_openai_realtime_translation_protocol() -> None:
     async def exercise() -> None:
         socket = _FakeSocket(

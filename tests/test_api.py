@@ -139,7 +139,7 @@ def test_realtime_transcription_bridge(
         socket.send_json({"type": "session.stop"})
     assert fake_provider.realtime.appended == ["AQI="]
     assert fake_provider.realtime.committed == 1
-    assert fake_provider.realtime.closed
+    assert fake_provider.realtime.closed_event.wait(timeout=1)
 
 
 def test_realtime_translation_bridge(
@@ -165,4 +165,4 @@ def test_realtime_translation_bridge(
         assert socket.receive_json()["type"] == "translation.delta"
         socket.send_json({"type": "session.stop"})
     assert fake_provider.realtime_translation.appended == ["AQI="]
-    assert fake_provider.realtime_translation.closed
+    assert fake_provider.realtime_translation.closed_event.wait(timeout=1)

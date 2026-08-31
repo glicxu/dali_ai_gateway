@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from dataclasses import dataclass, field
 
 import pytest
@@ -21,6 +22,7 @@ class FakeRealtimeSession:
     committed: int = 0
     cleared: int = 0
     closed: bool = False
+    closed_event: threading.Event = field(default_factory=threading.Event)
     events: asyncio.Queue[RealtimeEvent] = field(default_factory=asyncio.Queue)
 
     async def append(self, audio_base64: str) -> None:
@@ -49,6 +51,7 @@ class FakeRealtimeSession:
 
     async def close(self) -> None:
         self.closed = True
+        self.closed_event.set()
 
 
 @dataclass

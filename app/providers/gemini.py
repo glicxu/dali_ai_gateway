@@ -122,14 +122,16 @@ class GeminiProvider:
             )
             response.raise_for_status()
             value = response.json()
-            output = value["candidates"][0]["content"]["parts"][0]["text"]
-        except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as error:
+            if not isinstance(value, dict):
+                raise ValueError("Gemini returned an invalid response.")
+            output = _batch_transcription_text(value)
+        except (httpx.HTTPError, ValueError, TypeError) as error:
             raise PROVIDER_UNAVAILABLE from error
-        if not isinstance(output, str) or not output.strip():
-            raise PROVIDER_UNAVAILABLE
         usage = value.get("usageMetadata", {})
+        if not isinstance(usage, dict):
+            usage = {}
         return TranscriptionResult(
-            text=output.strip(),
+            text=output,
             detected_language=None,
             usage=UsageMeasurement(
                 input_tokens=_int(usage.get("promptTokenCount")),
@@ -427,6 +429,39 @@ def _transcription_text(value: object) -> str | None:
         return None
     stripped = text_value.strip()
     return stripped or None
+
+
+def _batch_transcription_text(value: dict[str, object]) -> str:
+    prompt_feedback = value.get("promptFeedback")
+    if isinstance(prompt_feedback, dict) and prompt_feedback.get("blockReason"):
+        raise ValueError("Gemini blocked the transcription response.")
+    candidates = value.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        return "<no audio>"
+    candidate = candidates[0]
+    if not isinstance(candidate, dict):
+        return "<no audio>"
+    if candidate.get("finishReason") in {
+        "SAFETY",
+        "BLOCKLIST",
+        "PROHIBITED_CONTENT",
+        "RECITATION",
+    }:
+        raise ValueError("Gemini blocked the transcription response.")
+    content = candidate.get("content")
+    if not isinstance(content, dict):
+        return "<no audio>"
+    parts = content.get("parts")
+    if not isinstance(parts, list):
+        return "<no audio>"
+    text = " ".join(
+        part["text"].strip()
+        for part in parts
+        if isinstance(part, dict)
+        and isinstance(part.get("text"), str)
+        and part["text"].strip()
+    )
+    return text or "<no audio>"
 
 
 def _merge_text(current: str, addition: str) -> str:
