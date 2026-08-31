@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = { text = "Proprietary" }
 dependencies = [
+  "cryptography==46.0.3",
   "fastapi==0.115.14",
   "httpx==0.28.1",
   "pydantic==2.12.5",
