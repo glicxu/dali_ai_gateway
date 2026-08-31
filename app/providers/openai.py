@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import audioop
+import base64
+import binascii
 import json
 from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -10,7 +13,13 @@ from websockets.asyncio.client import connect as websocket_connect
 
 from app.core.errors import PROVIDER_UNAVAILABLE
 from app.models import UsageMeasurement
-from app.providers.base import RealtimeEvent, TextResult, TranscriptionResult
+from app.providers.base import (
+    MediaResult,
+    RealtimeEvent,
+    SpeechResult,
+    TextResult,
+    TranscriptionResult,
+)
 
 
 class OpenAIProvider:
@@ -33,6 +42,17 @@ class OpenAIProvider:
         if self._owns_client:
             await self._client.aclose()
 
+    async def probe(self) -> None:
+        """Verify endpoint reachability and credentials without sending content."""
+        try:
+            response = await self._client.get(
+                f"{self._base_url}/models",
+                headers=self._headers,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            raise PROVIDER_UNAVAILABLE from error
+
     async def generate(
         self,
         *,
@@ -44,12 +64,13 @@ class OpenAIProvider:
     ) -> TextResult:
         payload: dict[str, object] = {
             "model": model,
-            "temperature": temperature,
             "messages": [
                 {"role": "system", "content": system_instruction},
                 {"role": "user", "content": input_text},
             ],
         }
+        if not model.startswith("gpt-5.6"):
+            payload["temperature"] = temperature
         if response_format == "json":
             payload["response_format"] = {"type": "json_object"}
         value = await self._post_json("/chat/completions", payload)
@@ -106,6 +127,85 @@ class OpenAIProvider:
             usage=UsageMeasurement(),
         )
 
+    async def synthesize(
+        self,
+        *,
+        model: str,
+        input_text: str,
+        voice: str,
+        instructions: str,
+    ) -> SpeechResult:
+        payload: dict[str, object] = {
+            "model": model,
+            "input": input_text,
+            "voice": voice,
+            "response_format": "wav",
+        }
+        if instructions:
+            payload["instructions"] = instructions
+        try:
+            response = await self._client.post(
+                f"{self._base_url}/audio/speech",
+                headers=self._headers,
+                json=payload,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            raise PROVIDER_UNAVAILABLE from error
+        if not response.content:
+            raise PROVIDER_UNAVAILABLE
+        return SpeechResult(
+            audio=response.content,
+            content_type=response.headers.get("content-type", "audio/wav").split(
+                ";", 1
+            )[0],
+            usage=UsageMeasurement(input_tokens=len(input_text)),
+        )
+
+    async def analyze_media(
+        self,
+        *,
+        model: str,
+        system_instruction: str,
+        prompt: str,
+        media: bytes,
+        content_type: str,
+        media_kind: str,
+        temperature: float,
+    ) -> MediaResult:
+        if media_kind != "image" or not content_type.startswith("image/"):
+            raise PROVIDER_UNAVAILABLE
+        encoded = base64.b64encode(media).decode("ascii")
+        value = await self._post_json(
+            "/responses",
+            {
+                "model": model,
+                "instructions": system_instruction,
+                "temperature": temperature,
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": prompt},
+                            {
+                                "type": "input_image",
+                                "image_url": f"data:{content_type};base64,{encoded}",
+                            },
+                        ],
+                    }
+                ],
+            },
+        )
+        output = _responses_output_text(value)
+        usage = value.get("usage") if isinstance(value.get("usage"), dict) else {}
+        return MediaResult(
+            output=output,
+            usage=UsageMeasurement(
+                input_tokens=_optional_int(usage.get("input_tokens")),
+                output_tokens=_optional_int(usage.get("output_tokens")),
+            ),
+        )
+
     async def open_realtime(
         self,
         *,
@@ -143,6 +243,7 @@ class OpenAIProvider:
             ),
             target_language=target_language,
             instructions=instructions,
+            audio_sample_rate_hz=audio_sample_rate_hz,
             connect=self._connect,
         )
         await session.start()
@@ -338,16 +439,19 @@ class OpenAIRealtimeTranslationSession:
         url: str,
         target_language: str,
         instructions: str,
+        audio_sample_rate_hz: int,
         connect: Callable[..., Awaitable[Any]],
     ) -> None:
         self._api_key = api_key
         self._url = url
         self._target_language = _translation_language(target_language)
         self._instructions = instructions
+        self._audio_sample_rate_hz = audio_sample_rate_hz
         self._connect = connect
         self._socket: Any | None = None
         self._events: asyncio.Queue[RealtimeEvent] = asyncio.Queue()
         self._reader: asyncio.Task[None] | None = None
+        self._rate_state: tuple | None = None
 
     async def start(self) -> None:
         try:
@@ -371,6 +475,22 @@ class OpenAIRealtimeTranslationSession:
             raise PROVIDER_UNAVAILABLE from error
 
     async def append(self, audio_base64: str) -> None:
+        try:
+            pcm = base64.b64decode(audio_base64, validate=True)
+            if len(pcm) % 2:
+                raise ValueError("PCM16 audio must contain complete samples")
+            if self._audio_sample_rate_hz != 24000:
+                pcm, self._rate_state = audioop.ratecv(
+                    pcm,
+                    2,
+                    1,
+                    self._audio_sample_rate_hz,
+                    24000,
+                    self._rate_state,
+                )
+            audio_base64 = base64.b64encode(pcm).decode("ascii")
+        except (binascii.Error, ValueError) as error:
+            raise PROVIDER_UNAVAILABLE from error
         await self._send(
             {"type": "session.input_audio_buffer.append", "audio": audio_base64}
         )
@@ -379,6 +499,7 @@ class OpenAIRealtimeTranslationSession:
         return None
 
     async def clear(self) -> None:
+        self._rate_state = None
         await self._send({"type": "session.input_audio_buffer.clear"})
 
     async def next_event(self) -> RealtimeEvent:
@@ -471,6 +592,34 @@ def _translation_language(value: str) -> str:
 
 def _translation_event(value: dict[str, object]) -> RealtimeEvent | None:
     event_type = str(value.get("type") or "")
+    if event_type in {
+        "session.output_audio.delta",
+        "response.output_audio.delta",
+    }:
+        audio = str(value.get("delta") or value.get("audio") or "")
+        return (
+            RealtimeEvent(
+                "translation.audio.delta",
+                audio=audio,
+                item_id=_optional_str(value.get("item_id") or value.get("response_id")),
+                content_type="audio/pcm",
+                sample_rate_hz=24000,
+                channels=1,
+            )
+            if audio
+            else None
+        )
+    if event_type in {
+        "session.output_audio.done",
+        "response.output_audio.done",
+    }:
+        return RealtimeEvent(
+            "translation.audio.final",
+            item_id=_optional_str(value.get("item_id") or value.get("response_id")),
+            content_type="audio/pcm",
+            sample_rate_hz=24000,
+            channels=1,
+        )
     delta_types = {
         "session.output_transcript.delta",
         "response.output_audio_transcript.delta",
@@ -518,3 +667,21 @@ def _optional_int(value: object) -> int | None:
 
 def _optional_str(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _responses_output_text(value: dict[str, object]) -> str:
+    output = value.get("output")
+    if not isinstance(output, list):
+        raise PROVIDER_UNAVAILABLE
+    text = "".join(
+        str(part.get("text") or "")
+        for item in output
+        if isinstance(item, dict)
+        for part in (
+            item.get("content") if isinstance(item.get("content"), list) else []
+        )
+        if isinstance(part, dict) and part.get("type") == "output_text"
+    ).strip()
+    if not text:
+        raise PROVIDER_UNAVAILABLE
+    return text

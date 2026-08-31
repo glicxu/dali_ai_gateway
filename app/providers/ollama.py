@@ -23,6 +23,14 @@ class OllamaProvider:
         if self._owns_client:
             await self._client.aclose()
 
+    async def probe(self) -> None:
+        """Verify local endpoint reachability without sending product content."""
+        try:
+            response = await self._client.get(f"{self._base_url}/api/tags")
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            raise PROVIDER_UNAVAILABLE from error
+
     async def generate(
         self,
         *,

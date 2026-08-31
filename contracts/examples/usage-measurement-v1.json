@@ -1,0 +1,21 @@
+{
+  "version": "dali.ai.usage.v1",
+  "event_id": "106751e7-3100-5a2d-b766-f2d183c0e57c",
+  "request_id": "5a3f02f8-e7e7-4af7-b70f-f8ba8cb53d87",
+  "workload_id": "dali_classroom_server",
+  "product": "classroom",
+  "capability": "text_generation",
+  "profile": "classroom.translation.economy",
+  "route_id": "gemini.primary",
+  "started_at": "2026-08-31T19:00:00Z",
+  "finished_at": "2026-08-31T19:00:00.125Z",
+  "disposition": "complete",
+  "input_tokens": {
+    "value": 7,
+    "source": "provider_reported"
+  },
+  "output_tokens": {
+    "value": 3,
+    "source": "provider_reported"
+  }
+}

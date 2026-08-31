@@ -45,6 +45,59 @@
         "title": "AudioTranscriptionResponse",
         "type": "object"
       },
+      "Body_analyze_media_ai_v1_media_analyses_post": {
+        "properties": {
+          "media": {
+            "format": "binary",
+            "title": "Media",
+            "type": "string"
+          },
+          "product": {
+            "pattern": "^[a-z][a-z0-9_-]{1,63}$",
+            "title": "Product",
+            "type": "string"
+          },
+          "profile": {
+            "pattern": "^[a-z][a-z0-9_.-]{2,127}$",
+            "title": "Profile",
+            "type": "string"
+          },
+          "prompt": {
+            "maxLength": 50000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "system_instruction": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "System Instruction",
+            "type": "string"
+          },
+          "temperature": {
+            "default": 0.2,
+            "maximum": 2.0,
+            "minimum": 0.0,
+            "title": "Temperature",
+            "type": "number"
+          }
+        },
+        "required": [
+          "request_id",
+          "product",
+          "profile",
+          "system_instruction",
+          "prompt",
+          "media"
+        ],
+        "title": "Body_analyze_media_ai_v1_media_analyses_post",
+        "type": "object"
+      },
       "Body_transcribe_audio_ai_v1_audio_transcriptions_post": {
         "properties": {
           "audio": {
@@ -101,6 +154,85 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "MediaAnalysisResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "output": {
+            "title": "Output",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/UsageMeasurement"
+          }
+        },
+        "required": [
+          "request_id",
+          "output",
+          "provider",
+          "model"
+        ],
+        "title": "MediaAnalysisResponse",
+        "type": "object"
+      },
+      "SpeechSynthesisRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "input": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Input",
+            "type": "string"
+          },
+          "instructions": {
+            "default": "",
+            "maxLength": 1000,
+            "title": "Instructions",
+            "type": "string"
+          },
+          "product": {
+            "pattern": "^[a-z][a-z0-9_-]{1,63}$",
+            "title": "Product",
+            "type": "string"
+          },
+          "profile": {
+            "pattern": "^[a-z][a-z0-9_.-]{2,127}$",
+            "title": "Profile",
+            "type": "string"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "voice": {
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "title": "Voice",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "product",
+          "profile",
+          "input",
+          "voice"
+        ],
+        "title": "SpeechSynthesisRequest",
         "type": "object"
       },
       "TextGenerationRequest": {
@@ -277,6 +409,77 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/ai/v1/audio/speech": {
+      "post": {
+        "operationId": "synthesize_speech_ai_v1_audio_speech_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Dali-Caller",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Dali-Caller"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpeechSynthesisRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "audio/wav": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Synthesize Speech",
+        "tags": [
+          "AI"
+        ]
+      }
+    },
     "/ai/v1/audio/transcriptions": {
       "post": {
         "operationId": "transcribe_audio_ai_v1_audio_transcriptions_post",
@@ -347,6 +550,81 @@
           }
         },
         "summary": "Transcribe Audio",
+        "tags": [
+          "AI"
+        ]
+      }
+    },
+    "/ai/v1/media/analyses": {
+      "post": {
+        "operationId": "analyze_media_ai_v1_media_analyses_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Dali-Caller",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Dali-Caller"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_analyze_media_ai_v1_media_analyses_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaAnalysisResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Analyze Media",
         "tags": [
           "AI"
         ]

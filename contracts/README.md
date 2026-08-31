@@ -10,8 +10,12 @@ Compatibility rules:
 - optional additive fields are preferred;
 - callers ignore unknown optional server fields;
 - raw provider errors and payloads never cross the boundary;
-- bearer tokens, audio, prompts, and generated content never appear in errors
+- bearer tokens, audio, image/video media, prompts, and generated content never appear in errors
   or diagnostics;
 - model profile names are stable policy identifiers; provider model IDs in
-  responses are informational and not client-selectable.
+responses are informational and not client-selectable.
 
+`schemas/usage-measurement-v1.schema.json` is generated from the strict,
+content-free internal measurement envelope by
+`python -m scripts.export_openapi`. Its presence does not select a durable sink
+or make measurements authoritative for billing or quota.

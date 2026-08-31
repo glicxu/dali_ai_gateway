@@ -12,19 +12,36 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi.responses import Response
 from pydantic import ValidationError
 
 from app.container import Container
 from app.core.errors import GatewayError, REQUEST_INVALID
 from app.models import (
     AudioTranscriptionResponse,
+    MediaAnalysisResponse,
     RealtimeAudioAppend,
     RealtimeCommand,
     RealtimeStart,
     RealtimeTranslationStart,
+    SpeechSynthesisRequest,
     TextGenerationRequest,
     TextGenerationResponse,
 )
+
+
+_IMAGE_CONTENT_TYPES = {
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+}
+_VIDEO_CONTENT_TYPES = {
+    "video/mp4",
+    "video/mpeg",
+    "video/quicktime",
+    "video/webm",
+}
 
 
 def router_for(container: Container) -> APIRouter:
@@ -36,7 +53,7 @@ def router_for(container: Container) -> APIRouter:
 
     @router.get("/health/ready", tags=["Health"])
     async def ready() -> dict[str, str]:
-        if not container.authenticator.configured or not container.registry.configured:
+        if not container.is_ready():
             raise GatewayError(
                 503,
                 "ai_gateway_not_ready",
@@ -55,8 +72,12 @@ def router_for(container: Container) -> APIRouter:
         authorization: str | None = Header(default=None),
         caller: str | None = Header(default=None, alias="X-Dali-Caller"),
     ) -> TextGenerationResponse:
-        principal = container.authenticator.authenticate(caller, authorization)
-        return await container.service.generate_text(caller=principal, request=request)
+        principal = await container.authenticator.authenticate_workload(
+            caller, authorization
+        )
+        return await container.service.generate_text(
+            caller=principal.workload_id, request=request
+        )
 
     @router.post(
         "/ai/v1/audio/transcriptions",
@@ -73,12 +94,14 @@ def router_for(container: Container) -> APIRouter:
         authorization: str | None = Header(default=None),
         caller: str | None = Header(default=None, alias="X-Dali-Caller"),
     ) -> AudioTranscriptionResponse:
-        principal = container.authenticator.authenticate(caller, authorization)
+        principal = await container.authenticator.authenticate_workload(
+            caller, authorization
+        )
         value = await audio.read(container.settings.max_audio_bytes + 1)
         if len(value) > container.settings.max_audio_bytes:
             raise REQUEST_INVALID
         return await container.service.transcribe_audio(
-            caller=principal,
+            caller=principal.workload_id,
             request_id=request_id,
             product=product,
             profile_name=profile,
@@ -89,10 +112,83 @@ def router_for(container: Container) -> APIRouter:
             terminology_prompt=terminology_prompt,
         )
 
+    @router.post(
+        "/ai/v1/audio/speech",
+        response_class=Response,
+        responses={200: {"content": {"audio/wav": {}}}},
+        tags=["AI"],
+    )
+    async def synthesize_speech(
+        request: SpeechSynthesisRequest,
+        authorization: str | None = Header(default=None),
+        caller: str | None = Header(default=None, alias="X-Dali-Caller"),
+    ) -> Response:
+        principal = await container.authenticator.authenticate_workload(
+            caller, authorization
+        )
+        result, provider, model = await container.service.synthesize_speech(
+            caller=principal.workload_id, request=request
+        )
+        headers = {
+            "X-Dali-Provider": provider,
+            "X-Dali-Model": model,
+        }
+        if result.usage.input_tokens is not None:
+            headers["X-Dali-Input-Tokens"] = str(result.usage.input_tokens)
+        if result.usage.output_tokens is not None:
+            headers["X-Dali-Output-Tokens"] = str(result.usage.output_tokens)
+        return Response(
+            content=result.audio,
+            media_type=result.content_type,
+            headers=headers,
+        )
+
+    @router.post(
+        "/ai/v1/media/analyses",
+        response_model=MediaAnalysisResponse,
+        tags=["AI"],
+    )
+    async def analyze_media(
+        request_id: UUID = Form(),
+        product: str = Form(pattern=r"^[a-z][a-z0-9_-]{1,63}$"),
+        profile: str = Form(pattern=r"^[a-z][a-z0-9_.-]{2,127}$"),
+        system_instruction: str = Form(min_length=1, max_length=20_000),
+        prompt: str = Form(min_length=1, max_length=50_000),
+        temperature: float = Form(default=0.2, ge=0, le=2),
+        media: UploadFile = File(),
+        authorization: str | None = Header(default=None),
+        caller: str | None = Header(default=None, alias="X-Dali-Caller"),
+    ) -> MediaAnalysisResponse:
+        principal = await container.authenticator.authenticate_workload(
+            caller, authorization
+        )
+        content_type = (media.content_type or "").lower()
+        if content_type in _IMAGE_CONTENT_TYPES:
+            media_kind = "image"
+        elif content_type in _VIDEO_CONTENT_TYPES:
+            media_kind = "video"
+        else:
+            raise REQUEST_INVALID
+        value = await media.read(container.settings.max_media_bytes + 1)
+        if not value or len(value) > container.settings.max_media_bytes:
+            raise REQUEST_INVALID
+        return await container.service.analyze_media(
+            caller=principal.workload_id,
+            request_id=request_id,
+            product=product,
+            profile_name=profile,
+            system_instruction=system_instruction,
+            prompt=prompt,
+            media=value,
+            content_type=content_type,
+            media_kind=media_kind,
+            temperature=temperature,
+        )
+
     @router.websocket("/ai/v1/realtime/transcriptions")
     async def realtime_transcription(websocket: WebSocket) -> None:
         try:
-            caller = container.authenticator.authenticate(
+            principal = await container.authenticator.authenticate_workload(
                 websocket.headers.get("x-dali-caller"),
                 websocket.headers.get("authorization"),
             )
@@ -106,6 +202,7 @@ def router_for(container: Container) -> APIRouter:
                 start = RealtimeStart.model_validate(await websocket.receive_json())
             except (ValidationError, ValueError, TypeError):
                 raise REQUEST_INVALID
+            caller = principal.workload_id
             async with container.service.admission.lease(
                 caller, "realtime_transcription"
             ):
@@ -131,7 +228,7 @@ def router_for(container: Container) -> APIRouter:
     @router.websocket("/ai/v1/realtime/translations")
     async def realtime_translation(websocket: WebSocket) -> None:
         try:
-            caller = container.authenticator.authenticate(
+            principal = await container.authenticator.authenticate_workload(
                 websocket.headers.get("x-dali-caller"),
                 websocket.headers.get("authorization"),
             )
@@ -147,6 +244,7 @@ def router_for(container: Container) -> APIRouter:
                 )
             except (ValidationError, ValueError, TypeError):
                 raise REQUEST_INVALID
+            caller = principal.workload_id
             async with container.service.admission.lease(
                 caller, "realtime_translation"
             ):
@@ -201,6 +299,14 @@ async def _bridge(websocket: WebSocket, session) -> None:
                 payload["text"] = event.text
             if event.item_id is not None:
                 payload["item_id"] = event.item_id
+            if event.audio is not None:
+                payload["audio"] = event.audio
+            if event.content_type is not None:
+                payload["content_type"] = event.content_type
+            if event.sample_rate_hz is not None:
+                payload["sample_rate_hz"] = event.sample_rate_hz
+            if event.channels is not None:
+                payload["channels"] = event.channels
             await websocket.send_json(payload)
         if client_task in done:
             raw = client_task.result()

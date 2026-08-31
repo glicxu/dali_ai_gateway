@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 
@@ -54,12 +55,16 @@ def _resolve_from_database(
                 "gemini_access_id": settings.gemini_credential_access_id,
             },
         ).mappings()
-        values = {
-            str(row["access_id"]): _nonempty_string(row["credential"]) for row in rows
-        }
+        values = {str(row["access_id"]): row["credential"] for row in rows}
     return ProviderCredentials(
-        openai=values.get(settings.openai_credential_access_id),
-        gemini=values.get(settings.gemini_credential_access_id),
+        openai=_credential_value(
+            values.get(settings.openai_credential_access_id),
+            field="OPENAI_API_KEY",
+        ),
+        gemini=_credential_value(
+            values.get(settings.gemini_credential_access_id),
+            field="GEMINI_API_KEY",
+        ),
     )
 
 
@@ -80,3 +85,24 @@ def _nonempty_string(value: object) -> str | None:
         return None
     stripped = value.strip()
     return stripped or None
+
+
+def _credential_value(value: object, *, field: str) -> str | None:
+    """Resolve plain or JSON-wrapped credentials without exposing their value."""
+    current = value
+    for _ in range(3):
+        if isinstance(current, dict):
+            current = current.get(field)
+            continue
+        text_value = _nonempty_string(current)
+        if text_value is None:
+            return None
+        try:
+            decoded = json.loads(text_value)
+        except (TypeError, ValueError):
+            return text_value
+        if isinstance(decoded, (str, dict)):
+            current = decoded
+            continue
+        return None
+    return _nonempty_string(current)

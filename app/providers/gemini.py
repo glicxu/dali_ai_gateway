@@ -4,7 +4,9 @@ import asyncio
 import audioop
 import base64
 import binascii
+import io
 import json
+import wave
 from typing import Any, Awaitable, Callable, Literal
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
@@ -13,7 +15,13 @@ from websockets.asyncio.client import connect as websocket_connect
 
 from app.core.errors import PROVIDER_UNAVAILABLE
 from app.models import UsageMeasurement
-from app.providers.base import RealtimeEvent, TextResult, TranscriptionResult
+from app.providers.base import (
+    MediaResult,
+    RealtimeEvent,
+    SpeechResult,
+    TextResult,
+    TranscriptionResult,
+)
 
 
 class GeminiProvider:
@@ -37,6 +45,18 @@ class GeminiProvider:
     async def close(self) -> None:
         if self._owns_client:
             await self._client.aclose()
+
+    async def probe(self) -> None:
+        """Verify endpoint reachability and credentials without sending content."""
+        try:
+            response = await self._client.get(
+                f"{self._base_url}/models",
+                headers={"x-goog-api-key": self._api_key},
+                params={"pageSize": "1"},
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            raise PROVIDER_UNAVAILABLE from error
 
     async def generate(
         self,
@@ -87,6 +107,13 @@ class GeminiProvider:
         terminology_prompt: str,
     ) -> TranscriptionResult:
         del filename
+        if model == "gemini-3.5-transcribe":
+            return await self._transcribe_interaction(
+                model=model,
+                audio=audio,
+                content_type=content_type,
+                source_language=source_language,
+            )
         language_instruction = (
             "Detect the spoken language."
             if source_language == "auto"
@@ -133,6 +160,151 @@ class GeminiProvider:
         return TranscriptionResult(
             text=output,
             detected_language=None,
+            usage=UsageMeasurement(
+                input_tokens=_int(usage.get("promptTokenCount")),
+                output_tokens=_int(usage.get("candidatesTokenCount")),
+            ),
+        )
+
+    async def _transcribe_interaction(
+        self,
+        *,
+        model: str,
+        audio: bytes,
+        content_type: str,
+        source_language: str,
+    ) -> TranscriptionResult:
+        transcription_config: dict[str, object] = {"mode": "verbatim"}
+        if source_language != "auto":
+            transcription_config["language_codes"] = [source_language]
+        try:
+            response = await self._client.post(
+                f"{self._base_url}/interactions",
+                headers={
+                    "x-goog-api-key": self._api_key,
+                    "Api-Revision": "2026-05-20",
+                },
+                json={
+                    "model": model,
+                    "input": [
+                        {
+                            "type": "audio",
+                            "data": base64.b64encode(audio).decode("ascii"),
+                            "mime_type": content_type,
+                        }
+                    ],
+                    "generation_config": {
+                        "transcription_config": transcription_config
+                    },
+                },
+            )
+            response.raise_for_status()
+            value = response.json()
+            if not isinstance(value, dict):
+                raise ValueError("Gemini returned an invalid interaction.")
+            output = _interaction_text(value)
+        except (httpx.HTTPError, ValueError, TypeError) as error:
+            raise PROVIDER_UNAVAILABLE from error
+        return TranscriptionResult(
+            text=output,
+            detected_language=_interaction_language(value),
+            usage=_interaction_usage(value),
+        )
+
+    async def synthesize(
+        self,
+        *,
+        model: str,
+        input_text: str,
+        voice: str,
+        instructions: str,
+    ) -> SpeechResult:
+        spoken_input = (
+            f"{instructions.strip()}\n\nText to speak:\n{input_text}"
+            if instructions.strip()
+            else input_text
+        )
+        try:
+            response = await self._client.post(
+                f"{self._base_url}/interactions",
+                headers={
+                    "x-goog-api-key": self._api_key,
+                    "Api-Revision": "2026-05-20",
+                },
+                json={
+                    "model": model,
+                    "input": spoken_input,
+                    "response_format": {
+                        "type": "audio",
+                    },
+                    "generation_config": {
+                        "speech_config": [{"voice": voice}]
+                    },
+                },
+            )
+            response.raise_for_status()
+            value = response.json()
+            if not isinstance(value, dict):
+                raise ValueError("Gemini returned an invalid interaction.")
+            output_audio, content_type = _interaction_audio(value)
+        except (httpx.HTTPError, ValueError, TypeError, binascii.Error) as error:
+            raise PROVIDER_UNAVAILABLE from error
+        return SpeechResult(
+            audio=output_audio,
+            content_type=content_type,
+            usage=_interaction_usage(value),
+        )
+
+    async def analyze_media(
+        self,
+        *,
+        model: str,
+        system_instruction: str,
+        prompt: str,
+        media: bytes,
+        content_type: str,
+        media_kind: str,
+        temperature: float,
+    ) -> MediaResult:
+        if media_kind not in {"image", "video"} or not content_type.startswith(
+            f"{media_kind}/"
+        ):
+            raise PROVIDER_UNAVAILABLE
+        try:
+            response = await self._client.post(
+                f"{self._base_url}/models/{model}:generateContent",
+                headers={"x-goog-api-key": self._api_key},
+                json={
+                    "systemInstruction": {"parts": [{"text": system_instruction}]},
+                    "contents": [
+                        {
+                            "role": "user",
+                            "parts": [
+                                {"text": prompt},
+                                {
+                                    "inlineData": {
+                                        "mimeType": content_type,
+                                        "data": base64.b64encode(media).decode("ascii"),
+                                    }
+                                },
+                            ],
+                        }
+                    ],
+                    "generationConfig": {"temperature": temperature},
+                },
+            )
+            response.raise_for_status()
+            value = response.json()
+            output = value["candidates"][0]["content"]["parts"][0]["text"]
+        except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as error:
+            raise PROVIDER_UNAVAILABLE from error
+        if not isinstance(output, str) or not output.strip():
+            raise PROVIDER_UNAVAILABLE
+        usage = value.get("usageMetadata", {})
+        if not isinstance(usage, dict):
+            usage = {}
+        return MediaResult(
+            output=output.strip(),
             usage=UsageMeasurement(
                 input_tokens=_int(usage.get("promptTokenCount")),
                 output_tokens=_int(usage.get("candidatesTokenCount")),
@@ -203,7 +375,7 @@ class GeminiProvider:
 
 
 class GeminiRealtimeSession:
-    """Normalized Gemini Live session; audio output is intentionally discarded."""
+    """Normalized Gemini Live transcription or native audio translation session."""
 
     def __init__(
         self,
@@ -381,6 +553,33 @@ class GeminiRealtimeSession:
             self._item_number += 1
 
     async def _read_translation(self, content: dict[str, object]) -> None:
+        model_turn = content.get("modelTurn")
+        if isinstance(model_turn, dict):
+            parts = model_turn.get("parts")
+            if isinstance(parts, list):
+                for part in parts:
+                    if not isinstance(part, dict):
+                        continue
+                    inline = part.get("inlineData")
+                    if not isinstance(inline, dict):
+                        continue
+                    audio = inline.get("data")
+                    mime_type = inline.get("mimeType")
+                    if isinstance(audio, str) and audio:
+                        await self._events.put(
+                            RealtimeEvent(
+                                "translation.audio.delta",
+                                audio=audio,
+                                item_id=self._item_id,
+                                content_type=(
+                                    mime_type
+                                    if isinstance(mime_type, str)
+                                    else "audio/pcm;rate=24000"
+                                ),
+                                sample_rate_hz=24000,
+                                channels=1,
+                            )
+                        )
         translated = _transcription_text(content.get("outputTranscription"))
         if translated:
             self._translation = _merge_text(self._translation, translated)
@@ -400,6 +599,16 @@ class GeminiRealtimeSession:
                 )
             )
             self._translation = ""
+        if content.get("turnComplete") is True:
+            await self._events.put(
+                RealtimeEvent(
+                    "translation.audio.final",
+                    item_id=self._item_id,
+                    content_type="audio/pcm;rate=24000",
+                    sample_rate_hz=24000,
+                    channels=1,
+                )
+            )
             self._item_number += 1
 
     @property
@@ -462,6 +671,92 @@ def _batch_transcription_text(value: dict[str, object]) -> str:
         and part["text"].strip()
     )
     return text or "<no audio>"
+
+
+def _interaction_text(value: dict[str, object]) -> str:
+    direct = value.get("output_text")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+    for item in _walk_dicts(value):
+        if item.get("type") == "text" and isinstance(item.get("text"), str):
+            text = str(item["text"]).strip()
+            if text:
+                return text
+    raise ValueError("Gemini interaction did not return text.")
+
+
+def _interaction_audio(value: dict[str, object]) -> tuple[bytes, str]:
+    candidates: list[dict[str, object]] = []
+    direct = value.get("output_audio")
+    if isinstance(direct, dict):
+        candidates.append(direct)
+    candidates.extend(
+        item for item in _walk_dicts(value) if item.get("type") == "audio"
+    )
+    for item in candidates:
+        encoded = item.get("data")
+        if not isinstance(encoded, str) or not encoded:
+            continue
+        content_type = str(item.get("mime_type") or "audio/wav")
+        audio = base64.b64decode(encoded, validate=True)
+        if audio:
+            if content_type.split(";", 1)[0].strip().lower() == "audio/l16":
+                audio = _pcm_to_wav(
+                    audio,
+                    sample_rate=_int(item.get("sample_rate")) or 24_000,
+                    channels=_int(item.get("channels")) or 1,
+                )
+                content_type = "audio/wav"
+            return audio, content_type
+    raise ValueError("Gemini interaction did not return audio.")
+
+
+def _interaction_language(value: dict[str, object]) -> str | None:
+    for item in _walk_dicts(value):
+        language = item.get("language_code") or item.get("language")
+        if isinstance(language, str) and language:
+            return language
+    return None
+
+
+def _interaction_usage(value: dict[str, object]) -> UsageMeasurement:
+    usage = value.get("usage")
+    if not isinstance(usage, dict):
+        usage = value.get("usage_metadata")
+    if not isinstance(usage, dict):
+        return UsageMeasurement()
+    return UsageMeasurement(
+        input_tokens=_int(
+            usage.get("input_tokens")
+            or usage.get("prompt_token_count")
+            or usage.get("promptTokenCount")
+        ),
+        output_tokens=_int(
+            usage.get("output_tokens")
+            or usage.get("candidates_token_count")
+            or usage.get("candidatesTokenCount")
+        ),
+    )
+
+
+def _walk_dicts(value: object):
+    if isinstance(value, dict):
+        yield value
+        for item in value.values():
+            yield from _walk_dicts(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _walk_dicts(item)
+
+
+def _pcm_to_wav(audio: bytes, *, sample_rate: int, channels: int) -> bytes:
+    target = io.BytesIO()
+    with wave.open(target, "wb") as output:
+        output.setnchannels(channels)
+        output.setsampwidth(2)
+        output.setframerate(sample_rate)
+        output.writeframes(audio)
+    return target.getvalue()
 
 
 def _merge_text(current: str, addition: str) -> str:

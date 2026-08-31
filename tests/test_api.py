@@ -1,15 +1,55 @@
 from __future__ import annotations
 
+import copy
+import json
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
+from app.core.config import DEFAULT_WORKLOAD_GRANTS, Settings
+from app.core.security import WorkloadPrincipal
+from app.main import create_app
 from tests.conftest import FakeProvider
+
+
+class _InjectedWorkloadAuthenticator:
+    configured = True
+    ready = True
+    workload_ids = frozenset({"dali_classroom_server"})
+
+    async def authenticate_workload(
+        self, caller_hint: str | None, authorization: str | None
+    ) -> WorkloadPrincipal:
+        del caller_hint
+        if authorization != "Bearer verified-workload-token":
+            raise RuntimeError("test verifier rejected credential")
+        return WorkloadPrincipal(
+            workload_id="dali_classroom_server",
+            credential_kind="workload_token",
+        )
+
+    async def start(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
 
 
 def test_health_and_readiness(client: TestClient) -> None:
     assert client.get("/health/live").json() == {"status": "ok"}
     assert client.get("/health/ready").json() == {"status": "ready"}
+
+
+def test_readiness_uses_cached_health_without_synchronous_probe(
+    client: TestClient, fake_provider: FakeProvider
+) -> None:
+    initial_calls = fake_provider.probe_calls
+    assert initial_calls == 2
+
+    assert client.get("/health/ready").status_code == 200
+    assert client.get("/health/ready").status_code == 200
+    assert fake_provider.probe_calls == initial_calls
 
 
 def test_text_generation_is_service_authenticated_and_profile_routed(
@@ -37,6 +77,107 @@ def test_text_generation_is_service_authenticated_and_profile_routed(
         "usage": {"input_tokens": 7, "output_tokens": 3, "audio_ms": None},
     }
     assert fake_provider.generated_inputs == ["Private lecture text."]
+
+
+def test_disabled_provider_route_fails_before_provider_work(
+    fake_provider: FakeProvider,
+) -> None:
+    settings = Settings(
+        service_tokens_json=SecretStr(
+            json.dumps({"dali_classroom_server": "service-test-token"})
+        ),
+        caller_limits_json=json.dumps({"dali_classroom_server": 1}),
+        provider_circuit_enabled=True,
+        provider_circuit_disabled_routes_json=json.dumps(
+            ["gemini.gemini-3.5-flash-lite"]
+        ),
+    )
+    application = create_app(
+        settings, providers={"openai": fake_provider, "gemini": fake_provider}
+    )
+    payload = {
+        "request_id": str(uuid4()),
+        "product": "classroom",
+        "profile": "classroom.translation.economy",
+        "system_instruction": "Translate faithfully.",
+        "input": "Private lecture text.",
+        "response_format": "text",
+        "temperature": 0,
+    }
+    with TestClient(application) as value:
+        response = value.post(
+            "/ai/v1/text/generations",
+            headers={
+                "Authorization": "Bearer service-test-token",
+                "X-Dali-Caller": "dali_classroom_server",
+            },
+            json=payload,
+        )
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "ai_gateway_provider_unavailable"
+    assert fake_provider.generated_inputs == []
+
+
+def test_speech_synthesis_is_profile_routed_as_binary(
+    fake_provider: FakeProvider,
+) -> None:
+    grants = copy.deepcopy(DEFAULT_WORKLOAD_GRANTS)
+    grants["dali_classroom_server"]["enabled"] = False
+    grants["dali_chat_server"]["enabled"] = True
+    settings = Settings(
+        service_tokens_json=SecretStr('{"dali_chat_server":"chat-token"}'),
+        legacy_auth_workload_ids_json='["dali_chat_server"]',
+        workload_grants_json=json.dumps(grants),
+    )
+    application = create_app(settings, providers={"gemini": fake_provider})
+    with TestClient(application) as value:
+        response = value.post(
+            "/ai/v1/audio/speech",
+            headers={
+                "Authorization": "Bearer chat-token",
+                "X-Dali-Caller": "dali_chat_server",
+            },
+            json={
+                "request_id": str(uuid4()),
+                "product": "dali_chat",
+                "profile": "dali_chat.speech.gemini",
+                "input": "Read this aloud.",
+                "voice": "Kore",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.content == b"RIFF-test-audio"
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.headers["x-dali-provider"] == "gemini"
+    assert response.headers["x-dali-model"] == "gemini-3.1-flash-tts-preview"
+    assert fake_provider.synthesized_text == ["Read this aloud."]
+
+
+def test_injected_authenticator_derives_workload_from_verified_credential(
+    settings: Settings, fake_provider: FakeProvider
+) -> None:
+    application = create_app(
+        settings,
+        providers={"openai": fake_provider, "gemini": fake_provider},
+        authenticator=_InjectedWorkloadAuthenticator(),
+    )
+    with TestClient(application) as value:
+        response = value.post(
+            "/ai/v1/text/generations",
+            headers={
+                "Authorization": "Bearer verified-workload-token",
+                "X-Dali-Caller": "untrusted_header_value",
+            },
+            json={
+                "request_id": str(uuid4()),
+                "product": "classroom",
+                "profile": "classroom.translation.economy",
+                "system_instruction": "Instruction",
+                "input": "Input",
+            },
+        )
+    assert response.status_code == 200
 
 
 def test_caller_cannot_cross_product_or_capability(
@@ -68,6 +209,115 @@ def test_caller_cannot_cross_product_or_capability(
     )
     assert wrong_capability.status_code == 403
 
+    implicit_shared_profile = client.post(
+        "/ai/v1/text/generations",
+        headers=headers,
+        json={
+            **base,
+            "product": "classroom",
+            "profile": "shared.text.gemini",
+        },
+    )
+    assert implicit_shared_profile.status_code == 403
+
+
+def test_readiness_requires_every_required_profile_provider(
+    settings: Settings, fake_provider: FakeProvider
+) -> None:
+    application = create_app(settings, providers={"gemini": fake_provider})
+    with TestClient(application) as value:
+        response = value.get("/health/ready")
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "ai_gateway_not_ready"
+
+
+def test_readiness_requires_exact_identity_and_grant_alignment(
+    fake_provider: FakeProvider,
+) -> None:
+    settings = Settings(
+        service_tokens_json=SecretStr(
+            '{"dali_classroom_server":"token","ungranted_server":"token-2"}'
+        ),
+        legacy_auth_workload_ids_json=('["dali_classroom_server","ungranted_server"]'),
+    )
+    application = create_app(
+        settings,
+        providers={"gemini": fake_provider, "openai": fake_provider},
+    )
+    with TestClient(application) as value:
+        response = value.get("/health/ready")
+    assert response.status_code == 503
+
+
+def test_required_provider_degradation_is_not_hidden(settings: Settings) -> None:
+    healthy = FakeProvider()
+    degraded = FakeProvider(probe_error=True)
+    application = create_app(
+        settings,
+        providers={"gemini": healthy, "openai": degraded},
+    )
+    with TestClient(application) as value:
+        response = value.get("/health/ready")
+        details = value.app.state.container.registry.safe_readiness_details()
+    assert response.status_code == 503
+    assert details["provider_counts"] == {
+        "unknown": 0,
+        "healthy": 1,
+        "degraded": 1,
+        "stale": 0,
+    }
+
+
+def test_optional_provider_degradation_does_not_flap_readiness(
+    settings: Settings,
+) -> None:
+    healthy = FakeProvider()
+    degraded = FakeProvider(probe_error=True)
+    application = create_app(
+        settings,
+        providers={"gemini": healthy, "openai": healthy, "ollama": degraded},
+    )
+    with TestClient(application) as value:
+        response = value.get("/health/ready")
+    assert response.status_code == 200
+
+
+def test_profile_kill_switch_denies_only_the_disabled_profile(
+    fake_provider: FakeProvider, headers: dict[str, str]
+) -> None:
+    grants = {
+        "dali_classroom_server": copy.deepcopy(
+            DEFAULT_WORKLOAD_GRANTS["dali_classroom_server"]
+        )
+    }
+    grants["dali_classroom_server"]["disabled_profiles"] = [
+        "classroom.translation.economy"
+    ]
+    settings = Settings(
+        service_tokens_json=SecretStr(
+            json.dumps({"dali_classroom_server": "service-test-token"})
+        ),
+        workload_grants_json=json.dumps(grants),
+    )
+    application = create_app(
+        settings,
+        providers={"gemini": fake_provider, "openai": fake_provider},
+    )
+    with TestClient(application) as value:
+        response = value.post(
+            "/ai/v1/text/generations",
+            headers=headers,
+            json={
+                "request_id": str(uuid4()),
+                "product": "classroom",
+                "profile": "classroom.translation.economy",
+                "system_instruction": "Instruction",
+                "input": "Input",
+            },
+        )
+        assert response.status_code == 403
+        assert value.get("/health/ready").status_code == 200
+
 
 def test_batch_transcription_is_bounded_and_routed(
     client: TestClient,
@@ -91,6 +341,55 @@ def test_batch_transcription_is_bounded_and_routed(
     assert response.json()["text"] == "Captured lecture."
     assert response.json()["model"] == "gemini-3.5-flash-lite"
     assert fake_provider.transcribed_audio == [b"RIFF-private-audio"]
+
+
+def test_media_analysis_is_bounded_authenticated_and_exactly_routed(
+    fake_provider: FakeProvider,
+) -> None:
+    grants = {
+        "dali_chat_server": copy.deepcopy(DEFAULT_WORKLOAD_GRANTS["dali_chat_server"])
+    }
+    grants["dali_chat_server"]["enabled"] = True
+    settings = Settings(
+        service_tokens_json=SecretStr('{"dali_chat_server":"chat-test-token"}'),
+        workload_grants_json=json.dumps(grants),
+        caller_limits_json='{"dali_chat_server":2}',
+        legacy_auth_workload_ids_json='["dali_chat_server"]',
+    )
+    application = create_app(
+        settings,
+        providers={"openai": fake_provider, "gemini": fake_provider},
+    )
+    data = {
+        "request_id": str(uuid4()),
+        "product": "dali_chat",
+        "profile": "dali_chat.video.gemini",
+        "system_instruction": "Analyze media safely.",
+        "prompt": "What happens in this clip?",
+    }
+    with TestClient(application) as value:
+        assert (
+            value.post(
+                "/ai/v1/media/analyses",
+                data=data,
+                files={"media": ("clip.mp4", b"private-video", "video/mp4")},
+            ).status_code
+            == 401
+        )
+        response = value.post(
+            "/ai/v1/media/analyses",
+            headers={
+                "Authorization": "Bearer chat-test-token",
+                "X-Dali-Caller": "dali_chat_server",
+            },
+            data=data,
+            files={"media": ("clip.mp4", b"private-video", "video/mp4")},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["output"] == "Analyzed media."
+    assert response.json()["provider"] == "gemini"
+    assert fake_provider.analyzed_media == [("video", b"private-video")]
 
 
 def test_validation_error_does_not_echo_private_content(

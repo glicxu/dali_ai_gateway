@@ -1,0 +1,183 @@
+{
+  "$defs": {
+    "MeasuredCount": {
+      "additionalProperties": false,
+      "properties": {
+        "estimation_method": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_.-]{2,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Estimation Method"
+        },
+        "source": {
+          "default": "unavailable",
+          "enum": [
+            "provider_reported",
+            "gateway_observed",
+            "estimated",
+            "unavailable"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "title": "MeasuredCount",
+      "type": "object"
+    }
+  },
+  "$id": "https://schemas.dalifin.com/ai/usage-measurement-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "capability": {
+      "enum": [
+        "text_generation",
+        "audio_transcription",
+        "speech_synthesis",
+        "image_analysis",
+        "video_analysis",
+        "realtime_transcription",
+        "realtime_translation"
+      ],
+      "title": "Capability",
+      "type": "string"
+    },
+    "disposition": {
+      "enum": [
+        "complete",
+        "partial",
+        "cancelled",
+        "timed_out",
+        "disconnected",
+        "provider_failed",
+        "ambiguous"
+      ],
+      "title": "Disposition",
+      "type": "string"
+    },
+    "event_id": {
+      "format": "uuid",
+      "title": "Event Id",
+      "type": "string"
+    },
+    "fallback_count": {
+      "default": 0,
+      "maximum": 16,
+      "minimum": 0,
+      "title": "Fallback Count",
+      "type": "integer"
+    },
+    "finished_at": {
+      "format": "date-time",
+      "title": "Finished At",
+      "type": "string"
+    },
+    "forwarded_audio_bytes": {
+      "$ref": "#/$defs/MeasuredCount"
+    },
+    "forwarded_audio_ms": {
+      "$ref": "#/$defs/MeasuredCount"
+    },
+    "generated_audio_bytes": {
+      "$ref": "#/$defs/MeasuredCount"
+    },
+    "generated_audio_ms": {
+      "$ref": "#/$defs/MeasuredCount"
+    },
+    "input_tokens": {
+      "$ref": "#/$defs/MeasuredCount"
+    },
+    "output_tokens": {
+      "$ref": "#/$defs/MeasuredCount"
+    },
+    "product": {
+      "pattern": "^[a-z][a-z0-9_-]{1,63}$",
+      "title": "Product",
+      "type": "string"
+    },
+    "profile": {
+      "pattern": "^[a-z][a-z0-9_.-]{2,127}$",
+      "title": "Profile",
+      "type": "string"
+    },
+    "request_id": {
+      "format": "uuid",
+      "title": "Request Id",
+      "type": "string"
+    },
+    "rotation_count": {
+      "default": 0,
+      "maximum": 128,
+      "minimum": 0,
+      "title": "Rotation Count",
+      "type": "integer"
+    },
+    "route_id": {
+      "pattern": "^[a-z][a-z0-9_.-]{2,127}$",
+      "title": "Route Id",
+      "type": "string"
+    },
+    "source_audio_accepted_bytes": {
+      "$ref": "#/$defs/MeasuredCount"
+    },
+    "source_audio_accepted_ms": {
+      "$ref": "#/$defs/MeasuredCount"
+    },
+    "source_audio_received_bytes": {
+      "$ref": "#/$defs/MeasuredCount"
+    },
+    "source_audio_received_ms": {
+      "$ref": "#/$defs/MeasuredCount"
+    },
+    "started_at": {
+      "format": "date-time",
+      "title": "Started At",
+      "type": "string"
+    },
+    "version": {
+      "const": "dali.ai.usage.v1",
+      "default": "dali.ai.usage.v1",
+      "title": "Version",
+      "type": "string"
+    },
+    "workload_id": {
+      "pattern": "^[a-z][a-z0-9_-]{2,63}$",
+      "title": "Workload Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "event_id",
+    "request_id",
+    "workload_id",
+    "product",
+    "capability",
+    "profile",
+    "route_id",
+    "started_at",
+    "finished_at",
+    "disposition"
+  ],
+  "title": "UsageMeasurementEnvelope",
+  "type": "object"
+}

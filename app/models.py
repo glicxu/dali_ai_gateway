@@ -34,6 +34,14 @@ class TextGenerationResponse(StrictModel):
     usage: UsageMeasurement = Field(default_factory=UsageMeasurement)
 
 
+class MediaAnalysisResponse(StrictModel):
+    request_id: UUID
+    output: str
+    provider: str
+    model: str
+    usage: UsageMeasurement = Field(default_factory=UsageMeasurement)
+
+
 class AudioTranscriptionResponse(StrictModel):
     request_id: UUID
     text: str
@@ -41,6 +49,15 @@ class AudioTranscriptionResponse(StrictModel):
     model: str
     detected_language: str | None = None
     usage: UsageMeasurement = Field(default_factory=UsageMeasurement)
+
+
+class SpeechSynthesisRequest(StrictModel):
+    request_id: UUID
+    product: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,63}$")
+    profile: str = Field(pattern=r"^[a-z][a-z0-9_.-]{2,127}$")
+    input: str = Field(min_length=1, max_length=4_096)
+    voice: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    instructions: str = Field(default="", max_length=1_000)
 
 
 class RealtimeStart(StrictModel):

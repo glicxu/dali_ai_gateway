@@ -10,19 +10,28 @@ from app.api.routes import router_for
 from app.container import Container, build_container
 from app.core.config import Settings, get_settings
 from app.core.errors import GatewayError
+from app.core.security import WorkloadAuthenticator
 
 
 def create_app(
     settings: Settings | None = None,
     *,
     providers: dict[str, object] | None = None,
+    authenticator: WorkloadAuthenticator | None = None,
 ) -> FastAPI:
-    container = build_container(settings or get_settings(), providers=providers)
+    container = build_container(
+        settings or get_settings(),
+        providers=providers,
+        authenticator=authenticator,
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        yield
-        await container.close()
+        await container.start()
+        try:
+            yield
+        finally:
+            await container.close()
 
     application = FastAPI(
         title="Dali AI Gateway",
