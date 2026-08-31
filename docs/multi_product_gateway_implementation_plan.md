@@ -1,6 +1,7 @@
 # Dali AI Gateway Multi-Product Implementation Plan
 
-Status: G1 local foundation complete; G2 consumer-ready boundary implemented  
+Status: G1 local foundation complete; G2 external-boundary implementation in
+progress; G3 local deploy/test boundary implemented
 Design authority:
 [`multi_product_gateway_design.md`](multi_product_gateway_design.md)  
 Related agent boundary:
@@ -116,7 +117,7 @@ conformance fixtures pass in both repositories.
 | G1 | Local foundation complete | G0 identifiers/contracts | Classroom-compatible policy/readiness hardening |
 | G2 | In progress | G1 | New workload/usage paths disabled initially |
 | G3 | In progress | G1 | Shared capacity policy disabled until state is approved |
-| G4 | Not started | G1 | New contract version/profile types disabled initially |
+| G4 | In progress (batch speech only) | G1 | Realtime v2 remains disabled |
 | G5 | Not started | G3, G4 | Fallback disabled by default |
 | G6 | Not started | G2-G5 | Operational readiness only |
 | G7 | Not started | G6 | Explicitly approved canary only |
@@ -140,6 +141,21 @@ one canonical terminal event for complete, partial, disconnected, cancelled,
 timed-out, provider-failed, and ambiguous outcomes. It is an interface/test
 slice only; request handlers do not treat it as billing or quota authority
 until Platform ingestion and durable-delivery ownership are approved.
+
+### 5.1 Latest verified checkpoint
+
+Commit `f6bf256` establishes the multi-product foundation. Subsequent local
+G3 work adds bounded renewable admission leases, product/profile/route-aware
+batch admission, and isolated batch provider-route circuits. The Python 3.12
+quality gate currently passes with 97 tests, compilation, and the checked-in
+OpenAPI export matching generated output.
+
+This checkpoint is deployable for isolated testing with
+`AI_GATEWAY_PROVIDER_CIRCUIT_ENABLED=false`, which preserves the released
+provider-routing behavior. Enabling process-local circuits is suitable only for
+single-instance evaluation. Shared admission/circuit storage, Host reserves,
+realtime v2, authoritative usage delivery, fallback, and multi-instance
+operations remain incomplete and block shared-production readiness.
 
 ## 6. Cross-Cutting Engineering Rules
 
@@ -432,9 +448,9 @@ operator supplies the issuer, JWKS, queue, IAM, and protected credential values.
 - [x] Introduce an injected admission-store interface with atomic acquire,
   renew/heartbeat where required, release, expiry recovery, and inspection.
 - [ ] Implement shared leases/counters using the approved technology.
-- [ ] Enforce workload, product, capability/profile, provider-route, realtime/
+- [~] Enforce workload, product, capability/profile, provider-route, realtime/
   batch, concurrency, and approved cost/volume dimensions.
-- [ ] Bound lease duration and recover abandoned work after process failure.
+- [~] Bound lease duration and recover abandoned work after process failure.
 - [x] Release capacity on success, failure, cancellation, timeout, disconnect,
   and shutdown.
 - [ ] Implement the approved fail-closed or conservative degraded behavior;
@@ -448,7 +464,7 @@ operator supplies the issuer, JWKS, queue, IAM, and protected credential values.
 - [ ] Keep reserve borrowing disabled unless explicitly approved.
 - [ ] If borrowing is approved, make it bounded, observable, and immediately
   reclaimable.
-- [ ] Add per-product/profile rollout and emergency admission switches.
+- [x] Add per-product/profile rollout and emergency admission switches.
 
 The local admission controller now accepts product, profile, and provider-route
 dimensions for HTTP workloads with deterministic fallback to the existing
@@ -466,7 +482,7 @@ caller/capability key until the versioned G4 session contract is implemented.
 ### Verification
 
 - [ ] Multi-process tests cannot exceed shared limits.
-- [ ] Expired leases recover without double release.
+- [x] Expired leases recover without double release.
 - [ ] New product traffic cannot consume the Host reserve.
 - [ ] Dependency degradation follows the approved safe ceiling/fail-closed rule.
 - [x] Provider circuit transitions are deterministic and content-free.
@@ -481,7 +497,7 @@ shared-state technology and degraded-mode policy are approved.
 ### Exit gate
 
 - [ ] Shared admission and reserve tests pass under concurrency/process failure.
-- [ ] Circuit state affects only intended profiles/routes.
+- [x] Circuit state affects only intended profiles/routes.
 - [ ] No new product is enabled.
 
 ## 11. G4 - Realtime v2, Translated Audio, and Conditional Speech
@@ -744,7 +760,7 @@ python -m scripts.export_openapi --check
 
 ### Contract verification
 
-- [ ] OpenAPI remains 3.1 and validates.
+- [x] OpenAPI remains 3.1 and validates.
 - [ ] Realtime/event schemas remain JSON Schema 2020-12 and validate.
 - [ ] Every example validates against its schema.
 - [ ] Backward compatibility with released Classroom v1 passes.
@@ -753,13 +769,13 @@ python -m scripts.export_openapi --check
 
 ### Security and privacy
 
-- [ ] Wrong/missing/revoked workload and wrong product/profile/capability fail.
-- [ ] Evaluation/shared profile isolation passes.
-- [ ] Credential rotation and overlap pass without secret output.
-- [ ] Request validation/provider errors contain no submitted values.
+- [x] Wrong/missing/revoked workload and wrong product/profile/capability fail.
+- [x] Evaluation/shared profile isolation passes.
+- [x] Credential rotation and overlap pass without secret output.
+- [x] Request validation/provider errors contain no submitted values.
 - [ ] Source/privacy scan covers logging, tracing, metrics, queues, exception
   serialization, and newly introduced state stores.
-- [ ] Strict profile/grant schemas reject prompts, instructions, terminology,
+- [x] Strict profile/grant schemas reject prompts, instructions, terminology,
   workflow, plan/tier, product content, and user/account fields.
 - [ ] Static independence scan rejects runtime imports from `app_server`,
   `dali_ai`, Classroom, Host, and Platform repositories.
@@ -771,7 +787,7 @@ python -m scripts.export_openapi --check
 - [ ] Shared limits/reserves pass multi-instance concurrency tests.
 - [ ] Input sequence/acceptance watermarks and output backpressure pass loss,
   duplication, slow-consumer, rotation, drain, and reconnect simulations.
-- [ ] Lease expiry/recovery and circuit transitions pass deterministic tests.
+- [x] Lease expiry/recovery and circuit transitions pass deterministic tests.
 - [ ] Provider timeout/outage/partial/ambiguous/cancellation paths pass.
 - [ ] Usage sink/relay failure, replay, conflict, and reconciliation pass.
 - [ ] Load and soak tests meet approved thresholds.
