@@ -1,0 +1,29 @@
+[Unit]
+Description=Dali AI Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dali-ai-gateway
+Group=dali-ai-gateway
+WorkingDirectory=/data/dali/prod/services/dali-ai-gateway/current
+EnvironmentFile=/data/dali/prod/config/secrets/dali_ai_gateway.env
+ExecStart=/data/dali/prod/services/dali-ai-gateway/current/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 5040 --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
