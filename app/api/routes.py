@@ -327,6 +327,7 @@ def router_for(container: Container) -> APIRouter:
                     profile=start.profile,
                     window_seconds=start.window_seconds,
                     fallback_profile=start.fallback_profile,
+                    alternate=start.policy == "windowed_alternate",
                     open_profile=open_profile,
                     session_ref=session_ref,
                 )
@@ -410,6 +411,7 @@ async def _bridge_v2(
     profile: str,
     window_seconds: int = 90,
     fallback_profile: str | None = None,
+    alternate: bool = False,
     open_profile=None,
     session_ref=None,
 ) -> None:
@@ -506,8 +508,14 @@ async def _bridge_v2(
                         raise REQUEST_INVALID
                     if time.monotonic() - window_started >= window_seconds:
                         previous_window_id = window_id
+                        next_profile = (
+                            fallback_profile
+                            if alternate and fallback_profile is not None
+                            else active_profile
+                        )
+                        previous_profile = active_profile
                         await session.close()
-                        session = await open_profile(active_profile)
+                        session = await open_profile(next_profile)
                         if session_ref is not None:
                             session_ref[0] = session
                         window_id = f"w-{uuid4()}"
@@ -523,6 +531,18 @@ async def _bridge_v2(
                                 "partial": False,
                             }
                         )
+                        if alternate and fallback_profile is not None:
+                            active_profile = next_profile
+                            await websocket.send_json(
+                                {
+                                    "type": "provider.switched",
+                                    "window_id": window_id,
+                                    "sequence": output_sequence + 1,
+                                    "from_provider": previous_profile,
+                                    "to_provider": active_profile,
+                                    "reason": "scheduled_alternate",
+                                }
+                            )
                     await session.append(append.audio)
                     input_sequence = append.sequence
                     accepted_sequence = input_sequence

@@ -6,7 +6,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 WindowSeconds = Literal[60, 90, 120]
-RealtimePolicyMode = Literal["single", "compare", "windowed_failover"]
+RealtimePolicyMode = Literal[
+    "single", "compare", "windowed_failover", "windowed_alternate"
+]
 
 
 class RealtimeRoutePolicy(BaseModel):
@@ -41,7 +43,7 @@ class RealtimeRoutePolicy(BaseModel):
             if self.fallback_profile is not None:
                 raise ValueError("compare mode cannot define fallback_profile")
         elif self.fallback_profile is None:
-            raise ValueError("windowed_failover mode requires fallback_profile")
+            raise ValueError("windowed routing mode requires fallback_profile")
 
         referenced = [
             profile

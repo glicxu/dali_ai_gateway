@@ -118,7 +118,9 @@ class RealtimeV2TranslationStart(StrictModel):
     compare_profile: str | None = Field(
         default=None, pattern=r"^[a-z][a-z0-9_.-]{2,127}$"
     )
-    policy: Literal["single", "compare", "windowed_failover"] = "single"
+    policy: Literal[
+        "single", "compare", "windowed_failover", "windowed_alternate"
+    ] = "single"
     window_seconds: Literal[60, 90, 120] = 90
     instructions: str = Field(default="", max_length=20_000)
     audio_sample_rate_hz: Literal[16000, 24000] = 24000
