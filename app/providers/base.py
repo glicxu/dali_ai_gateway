@@ -130,4 +130,5 @@ class RealtimeTranslationProvider(Protocol):
         target_language: str,
         instructions: str,
         audio_sample_rate_hz: int,
+        outputs: frozenset[str],
     ) -> RealtimeTranscriptionSession: ...

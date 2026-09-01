@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import copy
+import asyncio
 import json
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from app.core.config import DEFAULT_WORKLOAD_GRANTS, Settings
 from app.core.security import WorkloadPrincipal
 from app.main import create_app
+from app.models import RealtimeTranslationStart
+from app.providers.base import RealtimeEvent
 from tests.conftest import FakeProvider
 
 
@@ -34,6 +38,41 @@ class _InjectedWorkloadAuthenticator:
 
     async def close(self) -> None:
         return None
+
+
+class _ErrorOnceSession:
+    def __init__(self) -> None:
+        self.closed = False
+        self._appended = asyncio.Event()
+        self._error_sent = False
+
+    async def append(self, _: str) -> None:
+        self._error_sent = True
+        self._appended.set()
+
+    async def commit(self) -> None:
+        return None
+
+    async def clear(self) -> None:
+        return None
+
+    async def next_event(self) -> RealtimeEvent:
+        await self._appended.wait()
+        self._error_sent = False
+        return RealtimeEvent("error", code="provider_down")
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _FailoverProvider(FakeProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self._sessions = [_ErrorOnceSession(), self.realtime_translation]
+
+    async def open_realtime_translation(self, **kwargs):
+        self.realtime_translation_outputs.append(kwargs["outputs"])
+        return self._sessions.pop(0)
 
 
 def test_health_and_readiness(client: TestClient) -> None:
@@ -457,6 +496,11 @@ def test_realtime_translation_bridge(
                 "profile": "classroom.translation.live",
                 "target_language": "de-DE",
                 "instructions": "Translate the classroom lecture faithfully.",
+                "outputs": [
+                    "source_transcript",
+                    "target_transcript",
+                    "translated_audio",
+                ],
             }
         )
         assert socket.receive_json()["type"] == "session.ready"
@@ -464,4 +508,121 @@ def test_realtime_translation_bridge(
         assert socket.receive_json()["type"] == "translation.delta"
         socket.send_json({"type": "session.stop"})
     assert fake_provider.realtime_translation.appended == ["AQI="]
+    assert fake_provider.realtime_translation_outputs == [
+        frozenset({"source_transcript", "target_transcript", "translated_audio"})
+    ]
     assert fake_provider.realtime_translation.closed_event.wait(timeout=1)
+
+
+def test_realtime_translation_outputs_default_and_reject_duplicates() -> None:
+    values = {
+        "type": "session.start",
+        "request_id": str(uuid4()),
+        "product": "classroom",
+        "profile": "classroom.translation.live",
+        "target_language": "de-DE",
+    }
+    request = RealtimeTranslationStart.model_validate(values)
+    assert request.outputs == ["target_transcript", "translated_audio"]
+    with pytest.raises(ValidationError):
+        RealtimeTranslationStart.model_validate(
+            values | {"outputs": ["source_transcript", "source_transcript"]}
+        )
+
+
+def test_realtime_v2_single_contract_acknowledges_input(
+    client: TestClient,
+    headers: dict[str, str],
+    fake_provider: FakeProvider,
+) -> None:
+    with client.websocket_connect(
+        "/ai/v2/realtime/translations", headers=headers
+    ) as socket:
+        socket.send_json(
+            {
+                "type": "session.start",
+                "request_id": str(uuid4()),
+                "product": "classroom",
+                "profile": "classroom.translation.live",
+                "target_language": "de-DE",
+            }
+        )
+        ready = socket.receive_json()
+        assert ready["type"] == "session.ready"
+        assert ready["sequence"] == 0
+        socket.send_json({"type": "audio.append", "sequence": 1, "audio": "AQI="})
+        accepted = socket.receive_json()
+        assert accepted["type"] == "audio.accepted"
+        assert accepted["accepted_sequence"] == 1
+        assert socket.receive_json()["type"] == "translation.delta"
+        socket.send_json({"type": "session.stop"})
+    assert fake_provider.realtime_translation.closed_event.wait(timeout=1)
+
+
+def test_realtime_v2_rejects_unimplemented_comparison_policy(
+    client: TestClient, headers: dict[str, str]
+) -> None:
+    with client.websocket_connect(
+        "/ai/v2/realtime/translations", headers=headers
+    ) as socket:
+        socket.send_json(
+            {
+                "type": "session.start",
+                "request_id": str(uuid4()),
+                "product": "classroom",
+                "profile": "classroom.translation.live",
+                "target_language": "de-DE",
+                "policy": "compare",
+                "compare_profile": "dali_chat.interpret.openai",
+            }
+        )
+        error = socket.receive_json()
+        assert error["error"]["code"] == "ai_gateway_realtime_policy_not_implemented"
+
+
+def test_realtime_v2_automatically_fails_over_at_provider_error() -> None:
+    provider = _FailoverProvider()
+    grants = copy.deepcopy(DEFAULT_WORKLOAD_GRANTS["dali_chat_server"])
+    grants["enabled"] = True
+    settings = Settings(
+        service_tokens_json=SecretStr('{"dali_chat_server":"chat-test-token"}'),
+        workload_grants_json=json.dumps({"dali_chat_server": grants}),
+        caller_limits_json='{"dali_chat_server":1}',
+        legacy_auth_workload_ids_json='["dali_chat_server"]',
+    )
+    application = create_app(settings, providers={"openai": provider, "gemini": provider})
+    headers = {
+        "Authorization": "Bearer chat-test-token",
+        "X-Dali-Caller": "dali_chat_server",
+    }
+    with TestClient(application) as client:
+        with client.websocket_connect(
+            "/ai/v2/realtime/translations", headers=headers
+        ) as socket:
+            socket.send_json(
+                {
+                    "type": "session.start",
+                    "request_id": str(uuid4()),
+                    "product": "dali_chat",
+                    "profile": "dali_chat.interpret.openai",
+                    "fallback_profile": "dali_chat.interpret.gemini",
+                    "policy": "windowed_failover",
+                    "target_language": "zh-CN",
+                }
+            )
+            assert socket.receive_json()["type"] == "session.ready"
+            socket.send_json({"type": "audio.append", "sequence": 1, "audio": "AQI="})
+            events = [socket.receive_json(), socket.receive_json()]
+            if events[0]["type"] != "window.failed":
+                events.append(socket.receive_json())
+            assert any(event["type"] == "window.failed" for event in events)
+            switched = next(
+                event for event in events if event["type"] == "provider.switched"
+            )
+            assert switched["type"] == "provider.switched"
+            assert switched["from_provider"] == "dali_chat.interpret.openai"
+            assert switched["to_provider"] == "dali_chat.interpret.gemini"
+            socket.send_json({"type": "audio.append", "sequence": 2, "audio": "AQI="})
+            assert socket.receive_json()["type"] == "audio.accepted"
+            assert socket.receive_json()["type"] == "translation.delta"
+            socket.send_json({"type": "session.stop"})

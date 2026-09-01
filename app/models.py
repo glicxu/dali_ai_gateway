@@ -3,7 +3,9 @@ from __future__ import annotations
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.core.realtime_policy import RealtimeRoutePolicy
 
 
 class StrictModel(BaseModel):
@@ -79,6 +81,20 @@ class RealtimeTranslationStart(StrictModel):
     target_language: str = Field(min_length=2, max_length=35)
     instructions: str = Field(default="", max_length=20_000)
     audio_sample_rate_hz: Literal[16000, 24000] = 24000
+    outputs: list[
+        Literal["source_transcript", "target_transcript", "translated_audio"]
+    ] = Field(
+        default_factory=lambda: ["target_transcript", "translated_audio"],
+        min_length=1,
+        max_length=3,
+    )
+
+    @field_validator("outputs")
+    @classmethod
+    def outputs_are_unique(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("translation outputs must be unique")
+        return value
 
 
 class RealtimeAudioAppend(StrictModel):
@@ -88,3 +104,48 @@ class RealtimeAudioAppend(StrictModel):
 
 class RealtimeCommand(StrictModel):
     type: Literal["audio.commit", "audio.clear", "session.stop"]
+
+
+class RealtimeV2TranslationStart(StrictModel):
+    type: Literal["session.start"]
+    request_id: UUID
+    product: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,63}$")
+    profile: str = Field(pattern=r"^[a-z][a-z0-9_.-]{2,127}$")
+    target_language: str = Field(min_length=2, max_length=35)
+    fallback_profile: str | None = Field(
+        default=None, pattern=r"^[a-z][a-z0-9_.-]{2,127}$"
+    )
+    compare_profile: str | None = Field(
+        default=None, pattern=r"^[a-z][a-z0-9_.-]{2,127}$"
+    )
+    policy: Literal["single", "compare", "windowed_failover"] = "single"
+    window_seconds: Literal[60, 90, 120] = 90
+    instructions: str = Field(default="", max_length=20_000)
+    audio_sample_rate_hz: Literal[16000, 24000] = 24000
+    outputs: list[
+        Literal["source_transcript", "target_transcript", "translated_audio"]
+    ] = Field(default_factory=lambda: ["target_transcript", "translated_audio"])
+
+    @field_validator("outputs")
+    @classmethod
+    def outputs_are_unique(cls, value: list[str]) -> list[str]:
+        if not value or len(value) != len(set(value)):
+            raise ValueError("translation outputs must be non-empty and unique")
+        return value
+
+    @model_validator(mode="after")
+    def validate_route_policy(self) -> RealtimeV2TranslationStart:
+        RealtimeRoutePolicy(
+            mode=self.policy,
+            primary_profile=self.profile,
+            fallback_profile=self.fallback_profile,
+            compare_profile=self.compare_profile,
+            window_seconds=self.window_seconds,
+        )
+        return self
+
+
+class RealtimeV2AudioAppend(StrictModel):
+    type: Literal["audio.append"]
+    sequence: int = Field(ge=1)
+    audio: str = Field(min_length=1)

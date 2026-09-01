@@ -11,7 +11,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import httpx
 from websockets.asyncio.client import connect as websocket_connect
 
-from app.core.errors import PROVIDER_UNAVAILABLE
+from app.core.errors import PROVIDER_UNAVAILABLE, REQUEST_INVALID
 from app.models import UsageMeasurement
 from app.providers.base import (
     MediaResult,
@@ -235,7 +235,10 @@ class OpenAIProvider:
         target_language: str,
         instructions: str,
         audio_sample_rate_hz: int,
+        outputs: frozenset[str] = frozenset({"target_transcript", "translated_audio"}),
     ) -> OpenAIRealtimeTranslationSession:
+        if "source_transcript" in outputs:
+            raise REQUEST_INVALID
         session = OpenAIRealtimeTranslationSession(
             api_key=self._api_key,
             url=_specialized_realtime_url(
@@ -245,6 +248,7 @@ class OpenAIProvider:
             instructions=instructions,
             audio_sample_rate_hz=audio_sample_rate_hz,
             connect=self._connect,
+            outputs=outputs,
         )
         await session.start()
         return session
@@ -441,6 +445,7 @@ class OpenAIRealtimeTranslationSession:
         instructions: str,
         audio_sample_rate_hz: int,
         connect: Callable[..., Awaitable[Any]],
+        outputs: frozenset[str],
     ) -> None:
         self._api_key = api_key
         self._url = url
@@ -452,6 +457,7 @@ class OpenAIRealtimeTranslationSession:
         self._events: asyncio.Queue[RealtimeEvent] = asyncio.Queue()
         self._reader: asyncio.Task[None] | None = None
         self._rate_state: tuple | None = None
+        self._outputs = outputs
 
     async def start(self) -> None:
         try:
@@ -544,7 +550,7 @@ class OpenAIRealtimeTranslationSession:
                 if not isinstance(value, dict):
                     continue
                 event = _translation_event(value)
-                if event is not None:
+                if event is not None and self._selected(event):
                     await self._events.put(event)
             if self._socket is not None:
                 await self._events.put(
@@ -556,6 +562,13 @@ class OpenAIRealtimeTranslationSession:
             await self._events.put(
                 RealtimeEvent("error", code="provider_connection_closed")
             )
+
+    def _selected(self, event: RealtimeEvent) -> bool:
+        if event.type.startswith("translation.audio."):
+            return "translated_audio" in self._outputs
+        if event.type.startswith("translation."):
+            return "target_transcript" in self._outputs
+        return True
 
 
 def _realtime_url(base_url: str, model: str) -> str:

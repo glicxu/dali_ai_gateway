@@ -343,11 +343,19 @@ One WebSocket represents one source-audio-to-one-target-language translation
 lane. A product such as Interpreter opens independent sessions for multiple
 target languages and owns their coordination and partial-failure UX.
 
-The profile declares whether the lane can emit:
+The profile declares which lane outputs are supported. The caller chooses a
+non-empty subset of those outputs for each session:
 
+- source-language transcript;
 - translated text;
-- translated audio; or
-- both.
+- translated audio.
+
+Source-language transcript events use `transcript.delta/final`; translated text
+uses `translation.delta/final`; translated speech uses
+`translation.audio.delta/final`. The Gateway must not discard a provider's
+source transcript when the caller requested it. It also must not silently
+downgrade an unsupported output selection; the session fails before provider
+content is accepted.
 
 Text-only callers cannot request an audio-producing profile without an explicit
 grant.

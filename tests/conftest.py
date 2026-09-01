@@ -70,6 +70,7 @@ class FakeProvider:
     transcribed_audio: list[bytes] = field(default_factory=list)
     analyzed_media: list[tuple[str, bytes]] = field(default_factory=list)
     synthesized_text: list[str] = field(default_factory=list)
+    realtime_translation_outputs: list[frozenset[str]] = field(default_factory=list)
     probe_calls: int = 0
     probe_error: bool = False
 
@@ -112,6 +113,7 @@ class FakeProvider:
         return self.realtime
 
     async def open_realtime_translation(self, **kwargs) -> FakeRealtimeSession:
+        self.realtime_translation_outputs.append(kwargs["outputs"])
         return self.realtime_translation
 
     async def close(self) -> None:

@@ -630,6 +630,7 @@ def test_gemini_live_transcription_and_translation_protocols() -> None:
                 {"serverContent": {"outputTranscription": {"text": "Guten"}}},
                 {
                     "serverContent": {
+                        "interimInputTranscription": {"text": "Hel"},
                         "modelTurn": {
                             "parts": [
                                 {
@@ -640,6 +641,7 @@ def test_gemini_live_transcription_and_translation_protocols() -> None:
                                 }
                             ]
                         },
+                        "inputTranscription": {"text": "Hello."},
                         "outputTranscription": {"text": "Tag."},
                         "turnComplete": True,
                     }
@@ -701,6 +703,9 @@ def test_gemini_live_transcription_and_translation_protocols() -> None:
             target_language="de-DE",
             instructions="Translate faithfully.",
             audio_sample_rate_hz=16000,
+            outputs=frozenset(
+                {"source_transcript", "target_transcript", "translated_audio"}
+            ),
         )
         setup = translation_socket.sent[0]["setup"]
         assert setup["model"] == "models/gemini-3.5-live-translate-preview"
@@ -711,10 +716,19 @@ def test_gemini_live_transcription_and_translation_protocols() -> None:
         assert setup["inputAudioTranscription"] == {}
         assert setup["outputAudioTranscription"] == {}
         assert (await translation.next_event()).text == "Guten"
+        interim_source = await translation.next_event()
+        assert interim_source.type == "transcript.delta"
+        assert interim_source.text == "Hel"
+        source = await translation.next_event()
+        assert source.type == "transcript.delta"
+        assert source.text == "Hello."
         audio = await translation.next_event()
         assert audio.type == "translation.audio.delta"
         assert audio.audio == "AQI="
         assert (await translation.next_event()).text == "Tag."
+        source_final = await translation.next_event()
+        assert source_final.type == "transcript.final"
+        assert source_final.text == "Hello."
         final = await translation.next_event()
         assert final.type == "translation.final"
         assert final.text == "Guten Tag."
@@ -763,6 +777,66 @@ def test_gemini_live_session_requests_rotation_before_provider_limit() -> None:
         assert event.type == "error"
         assert event.code == "provider_session_rotation_required"
         await realtime.close()
+        await client.aclose()
+
+    asyncio.run(exercise())
+
+
+def test_gemini_translation_source_only_suppresses_target_and_audio() -> None:
+    async def exercise() -> None:
+        socket = _FakeSocket(
+            [
+                {
+                    "serverContent": {
+                        "interimInputTranscription": {"text": "Hel"},
+                        "inputTranscription": {"text": "Hello."},
+                        "outputTranscription": {"text": "Hallo."},
+                        "modelTurn": {
+                            "parts": [
+                                {
+                                    "inlineData": {
+                                        "data": "AQI=",
+                                        "mimeType": "audio/pcm;rate=24000",
+                                    }
+                                }
+                            ]
+                        },
+                        "turnComplete": True,
+                    }
+                }
+            ]
+        )
+
+        async def connect(url: str, **kwargs):
+            return socket
+
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(500, json={"error": "unused"})
+            )
+        )
+        provider = GeminiProvider(
+            api_key="gemini-test-key",
+            base_url="https://generativelanguage.googleapis.com/v1beta",
+            timeout_seconds=5,
+            client=client,
+            connect=connect,
+        )
+        translation = await provider.open_realtime_translation(
+            model="gemini-3.5-live-translate-preview",
+            target_language="de-DE",
+            instructions="",
+            audio_sample_rate_hz=16000,
+            outputs=frozenset({"source_transcript"}),
+        )
+        setup = socket.sent[0]["setup"]
+        assert setup["inputAudioTranscription"] == {}
+        assert "outputAudioTranscription" not in setup
+        assert (await translation.next_event()).type == "transcript.delta"
+        assert (await translation.next_event()).type == "transcript.delta"
+        assert (await translation.next_event()).type == "transcript.final"
+        assert (await translation.next_event()).type == "error"
+        await translation.close()
         await client.aclose()
 
     asyncio.run(exercise())

@@ -193,9 +193,7 @@ class GeminiProvider:
                             "mime_type": content_type,
                         }
                     ],
-                    "generation_config": {
-                        "transcription_config": transcription_config
-                    },
+                    "generation_config": {"transcription_config": transcription_config},
                 },
             )
             response.raise_for_status()
@@ -237,9 +235,7 @@ class GeminiProvider:
                     "response_format": {
                         "type": "audio",
                     },
-                    "generation_config": {
-                        "speech_config": [{"voice": voice}]
-                    },
+                    "generation_config": {"speech_config": [{"voice": voice}]},
                 },
             )
             response.raise_for_status()
@@ -349,26 +345,31 @@ class GeminiProvider:
         target_language: str,
         instructions: str,
         audio_sample_rate_hz: int,
+        outputs: frozenset[str] = frozenset({"target_transcript", "translated_audio"}),
     ) -> GeminiRealtimeSession:
         del instructions
+        setup_config: dict[str, object] = {
+            "generationConfig": {
+                "responseModalities": ["AUDIO"],
+                "translationConfig": {
+                    "targetLanguageCode": target_language,
+                    "echoTargetLanguage": True,
+                },
+            }
+        }
+        if "source_transcript" in outputs:
+            setup_config["inputAudioTranscription"] = {}
+        if "target_transcript" in outputs:
+            setup_config["outputAudioTranscription"] = {}
         session = GeminiRealtimeSession(
             url=_live_url(self._base_url, self._api_key),
             model=model,
             mode="translation",
-            setup_config={
-                "generationConfig": {
-                    "responseModalities": ["AUDIO"],
-                    "translationConfig": {
-                        "targetLanguageCode": target_language,
-                        "echoTargetLanguage": True,
-                    },
-                },
-                "inputAudioTranscription": {},
-                "outputAudioTranscription": {},
-            },
+            setup_config=setup_config,
             audio_sample_rate_hz=audio_sample_rate_hz,
             connect=self._connect,
             max_duration_seconds=self._realtime_session_max_seconds,
+            outputs=outputs,
         )
         await session.start()
         return session
@@ -387,6 +388,7 @@ class GeminiRealtimeSession:
         audio_sample_rate_hz: int,
         connect: Callable[..., Awaitable[Any]],
         max_duration_seconds: float,
+        outputs: frozenset[str] = frozenset(),
     ) -> None:
         self._url = url
         self._model = model
@@ -401,7 +403,9 @@ class GeminiRealtimeSession:
         self._deadline: asyncio.Task[None] | None = None
         self._rate_state: tuple | None = None
         self._translation = ""
+        self._source_transcript = ""
         self._item_number = 1
+        self._outputs = outputs
 
     async def start(self) -> None:
         try:
@@ -454,6 +458,7 @@ class GeminiRealtimeSession:
     async def clear(self) -> None:
         self._rate_state = None
         self._translation = ""
+        self._source_transcript = ""
 
     async def next_event(self) -> RealtimeEvent:
         return await self._events.get()
@@ -478,6 +483,7 @@ class GeminiRealtimeSession:
                 pass
         self._rate_state = None
         self._translation = ""
+        self._source_transcript = ""
 
     async def _enforce_deadline(self) -> None:
         try:
@@ -553,8 +559,27 @@ class GeminiRealtimeSession:
             self._item_number += 1
 
     async def _read_translation(self, content: dict[str, object]) -> None:
+        interim_source = _transcription_text(content.get("interimInputTranscription"))
+        if interim_source and "source_transcript" in self._outputs:
+            await self._events.put(
+                RealtimeEvent(
+                    "transcript.delta",
+                    text=interim_source,
+                    item_id=self._item_id,
+                )
+            )
+        source = _transcription_text(content.get("inputTranscription"))
+        if source and "source_transcript" in self._outputs:
+            self._source_transcript = _merge_text(self._source_transcript, source)
+            await self._events.put(
+                RealtimeEvent(
+                    "transcript.delta",
+                    text=source,
+                    item_id=self._item_id,
+                )
+            )
         model_turn = content.get("modelTurn")
-        if isinstance(model_turn, dict):
+        if "translated_audio" in self._outputs and isinstance(model_turn, dict):
             parts = model_turn.get("parts")
             if isinstance(parts, list):
                 for part in parts:
@@ -581,7 +606,7 @@ class GeminiRealtimeSession:
                             )
                         )
         translated = _transcription_text(content.get("outputTranscription"))
-        if translated:
+        if translated and "target_transcript" in self._outputs:
             self._translation = _merge_text(self._translation, translated)
             await self._events.put(
                 RealtimeEvent(
@@ -590,6 +615,15 @@ class GeminiRealtimeSession:
                     item_id=self._item_id,
                 )
             )
+        if content.get("turnComplete") is True and self._source_transcript.strip():
+            await self._events.put(
+                RealtimeEvent(
+                    "transcript.final",
+                    text=self._source_transcript.strip(),
+                    item_id=self._item_id,
+                )
+            )
+            self._source_transcript = ""
         if content.get("turnComplete") is True and self._translation.strip():
             await self._events.put(
                 RealtimeEvent(
@@ -599,7 +633,7 @@ class GeminiRealtimeSession:
                 )
             )
             self._translation = ""
-        if content.get("turnComplete") is True:
+        if content.get("turnComplete") is True and "translated_audio" in self._outputs:
             await self._events.put(
                 RealtimeEvent(
                     "translation.audio.final",
@@ -609,6 +643,7 @@ class GeminiRealtimeSession:
                     channels=1,
                 )
             )
+        if content.get("turnComplete") is True:
             self._item_number += 1
 
     @property

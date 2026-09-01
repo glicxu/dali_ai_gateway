@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from uuid import UUID
+import time
+from uuid import UUID, uuid4
 
 from fastapi import (
     APIRouter,
@@ -24,6 +25,8 @@ from app.models import (
     RealtimeCommand,
     RealtimeStart,
     RealtimeTranslationStart,
+    RealtimeV2AudioAppend,
+    RealtimeV2TranslationStart,
     SpeechSynthesisRequest,
     TextGenerationRequest,
     TextGenerationResponse,
@@ -267,6 +270,76 @@ def router_for(container: Container) -> APIRouter:
             if session is not None:
                 await session.close()
 
+    @router.websocket("/ai/v2/realtime/translations")
+    async def realtime_translation_v2(websocket: WebSocket) -> None:
+        """Versioned contract foundation; routing policies are added next."""
+        try:
+            principal = await container.authenticator.authenticate_workload(
+                websocket.headers.get("x-dali-caller"),
+                websocket.headers.get("authorization"),
+            )
+        except GatewayError as error:
+            await websocket.close(code=4401, reason=error.code)
+            return
+        await websocket.accept()
+        session = None
+        session_ref = [None]
+        try:
+            try:
+                start = RealtimeV2TranslationStart.model_validate(
+                    await websocket.receive_json()
+                )
+            except (ValidationError, ValueError, TypeError):
+                raise REQUEST_INVALID
+            if start.policy == "compare":
+                raise GatewayError(
+                    400,
+                    "ai_gateway_realtime_policy_not_implemented",
+                    "Realtime comparison is not enabled yet.",
+                )
+            caller = principal.workload_id
+            async with container.service.admission.lease(
+                caller, "realtime_translation"
+            ):
+                request = RealtimeTranslationStart(
+                    type=start.type,
+                    request_id=start.request_id,
+                    product=start.product,
+                    profile=start.profile,
+                    target_language=start.target_language,
+                    instructions=start.instructions,
+                    audio_sample_rate_hz=start.audio_sample_rate_hz,
+                    outputs=start.outputs,
+                )
+
+                async def open_profile(profile: str):
+                    return await container.service.open_realtime_translation(
+                        caller=caller,
+                        request=request.model_copy(update={"profile": profile}),
+                    )
+
+                session = await open_profile(start.profile)
+                session_ref[0] = session
+                await _bridge_v2(
+                    websocket,
+                    session,
+                    request_id=start.request_id,
+                    profile=start.profile,
+                    window_seconds=start.window_seconds,
+                    fallback_profile=start.fallback_profile,
+                    open_profile=open_profile,
+                    session_ref=session_ref,
+                )
+        except WebSocketDisconnect:
+            pass
+        except GatewayError as error:
+            await _safe_error(websocket, error)
+        finally:
+            if session_ref[0] is not None:
+                await session_ref[0].close()
+            elif session is not None:
+                await session.close()
+
     return router
 
 
@@ -324,6 +397,159 @@ async def _bridge(websocket: WebSocket, session) -> None:
                     elif command.type == "audio.clear":
                         await session.clear()
                     else:
+                        return
+            except ValidationError as error:
+                raise REQUEST_INVALID from error
+
+
+async def _bridge_v2(
+    websocket: WebSocket,
+    session,
+    *,
+    request_id: UUID,
+    profile: str,
+    window_seconds: int = 90,
+    fallback_profile: str | None = None,
+    open_profile=None,
+    session_ref=None,
+) -> None:
+    window_id = f"w-{uuid4()}"
+    output_sequence = 0
+    accepted_sequence = 0
+    input_sequence = 0
+    window_started = time.monotonic()
+    active_profile = profile
+    await websocket.send_json(
+        {
+            "type": "session.ready",
+            "request_id": str(request_id),
+            "window_id": window_id,
+            "profile": profile,
+            "sequence": 0,
+        }
+    )
+    while True:
+        client_task = asyncio.create_task(websocket.receive_json())
+        provider_task = asyncio.create_task(session.next_event())
+        done, pending = await asyncio.wait(
+            {client_task, provider_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        if provider_task in done:
+            event = provider_task.result()
+            output_sequence += 1
+            if event.type == "error":
+                await websocket.send_json(
+                    {
+                        "type": "window.failed",
+                        "window_id": window_id,
+                        "sequence": output_sequence,
+                        "accepted_sequence": accepted_sequence,
+                        "partial": accepted_sequence > 0,
+                        "retryable": True,
+                    }
+                )
+                if fallback_profile is None or open_profile is None:
+                    return
+                try:
+                    await session.close()
+                    session = await open_profile(fallback_profile)
+                    if session_ref is not None:
+                        session_ref[0] = session
+                except Exception:
+                    return
+                previous_profile = active_profile
+                active_profile = fallback_profile
+                window_id = f"w-{uuid4()}"
+                window_started = time.monotonic()
+                accepted_sequence = 0
+                await websocket.send_json(
+                    {
+                        "type": "provider.switched",
+                        "window_id": window_id,
+                        "sequence": output_sequence + 1,
+                        "from_provider": previous_profile,
+                        "to_provider": active_profile,
+                        "reason": "provider_unavailable",
+                    }
+                )
+                continue
+            payload = {
+                "type": event.type,
+                "window_id": window_id,
+                "sequence": output_sequence,
+            }
+            if event.text is not None:
+                payload["text"] = event.text
+            if event.item_id is not None:
+                payload["item_id"] = event.item_id
+            if event.audio is not None:
+                payload["audio"] = event.audio
+            if event.content_type is not None:
+                payload["content_type"] = event.content_type
+            if event.sample_rate_hz is not None:
+                payload["sample_rate_hz"] = event.sample_rate_hz
+            if event.channels is not None:
+                payload["channels"] = event.channels
+            await websocket.send_json(payload)
+        if client_task in done:
+            raw = client_task.result()
+            event_type = raw.get("type") if isinstance(raw, dict) else None
+            try:
+                if event_type == "audio.append":
+                    append = RealtimeV2AudioAppend.model_validate(raw)
+                    if append.sequence <= input_sequence:
+                        raise REQUEST_INVALID
+                    if len(append.audio) > 1_400_000:
+                        raise REQUEST_INVALID
+                    if time.monotonic() - window_started >= window_seconds:
+                        previous_window_id = window_id
+                        await session.close()
+                        session = await open_profile(active_profile)
+                        if session_ref is not None:
+                            session_ref[0] = session
+                        window_id = f"w-{uuid4()}"
+                        window_started = time.monotonic()
+                        accepted_sequence = 0
+                        await websocket.send_json(
+                            {
+                                "type": "window.closed",
+                                "window_id": previous_window_id,
+                                "sequence": output_sequence + 1,
+                                "accepted_sequence": input_sequence,
+                                "output_sequence": output_sequence,
+                                "partial": False,
+                            }
+                        )
+                    await session.append(append.audio)
+                    input_sequence = append.sequence
+                    accepted_sequence = input_sequence
+                    await websocket.send_json(
+                        {
+                            "type": "audio.accepted",
+                            "window_id": window_id,
+                            "sequence": output_sequence + 1,
+                            "accepted_sequence": accepted_sequence,
+                        }
+                    )
+                else:
+                    command = RealtimeCommand.model_validate(raw)
+                    if command.type == "audio.commit":
+                        await session.commit()
+                    elif command.type == "audio.clear":
+                        await session.clear()
+                    else:
+                        await websocket.send_json(
+                            {
+                                "type": "session.closed",
+                                "window_id": window_id,
+                                "sequence": output_sequence + 1,
+                                "accepted_sequence": accepted_sequence,
+                                "output_sequence": output_sequence,
+                            }
+                        )
                         return
             except ValidationError as error:
                 raise REQUEST_INVALID from error

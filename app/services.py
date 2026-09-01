@@ -27,7 +27,9 @@ from app.providers.registry import ProviderRegistry
 class AdmissionStore(Protocol):
     """Atomic lease boundary for process-local or shared implementations."""
 
-    async def acquire(self, key: tuple[str, ...], limit: int, ttl: float) -> str | None: ...
+    async def acquire(
+        self, key: tuple[str, ...], limit: int, ttl: float
+    ) -> str | None: ...
 
     async def renew(self, lease_id: str, ttl: float) -> bool: ...
 
@@ -54,7 +56,11 @@ class InMemoryAdmissionStore:
     async def recover_expired(self) -> int:
         now = time.monotonic()
         async with self._lock:
-            expired = [lease_id for lease_id, lease in self._leases.items() if lease.expires_at <= now]
+            expired = [
+                lease_id
+                for lease_id, lease in self._leases.items()
+                if lease.expires_at <= now
+            ]
             for lease_id in expired:
                 del self._leases[lease_id]
             return len(expired)
@@ -360,4 +366,5 @@ class GatewayService:
             target_language=request.target_language,
             instructions=request.instructions,
             audio_sample_rate_hz=request.audio_sample_rate_hz,
+            outputs=frozenset(request.outputs),
         )

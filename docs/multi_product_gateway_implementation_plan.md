@@ -528,6 +528,15 @@ shared-state technology and degraded-mode policy are approved.
 
 ### Provider-neutral session behavior
 
+The existing v1 translation start event now has an additive, optional `outputs`
+selection for the Gemini capability-demo path. Its values are
+`source_transcript`, `target_transcript`, and `translated_audio`; omission keeps
+the prior target-transcript-plus-audio behavior. Gemini source text is forwarded
+as normalized `transcript.delta/final` events rather than being discarded.
+Provider profiles that cannot supply a requested output fail before accepting
+content. This additive pilot does not complete or replace the versioned G4
+realtime v2 work below.
+
 - [ ] Extend provider base protocols without leaking native provider events.
 - [ ] Keep one source or one target-language lane per Gateway session.
 - [ ] Preserve product ownership of multi-target orchestration and partial
@@ -541,10 +550,12 @@ shared-state technology and degraded-mode policy are approved.
 - [ ] Permit delta coalescing only when contract tests prove it cannot alter
   final text/audio semantics.
 - [ ] Surface planned provider expiry as rotation, not generic outage.
-- [ ] Require explicit product-service reconnect after provider content
-  acceptance; do not silently restart a lane.
-- [ ] Return accepted-input/output watermarks so the product owns an explicit
-  bounded replay-tail and duplicate-suppression decision.
+- [ ] After provider content acceptance, automatically close/mark the current
+  window and open the next approved fallback window in Gateway; do not require
+  a product-client reconnect or silently replay accepted audio.
+- [ ] Return accepted-input/output watermarks for ordering, diagnostics, and
+  duplicate suppression. Replay of accepted audio is disabled for this design;
+  enabling a replay tail requires a separate ADR.
 
 ### Conditional speech synthesis
 
@@ -592,9 +603,13 @@ shared-state technology and degraded-mode policy are approved.
 - [ ] Distinguish failure before provider acceptance, unambiguous no-result,
   ambiguous acceptance/charge, partial output, planned rotation, cancellation,
   and terminal provider failure.
-- [ ] Allow bounded retry/fallback only at design-approved safe points.
+- [ ] Allow automatic provider fallback after realtime content acceptance only
+  at a design-approved window boundary. The Gateway, not the product client,
+  opens the next window; no client reconnect is required.
 - [ ] Prohibit silent batch duplication after ambiguous outcomes.
-- [ ] Prohibit silent realtime failover after audio/content acceptance.
+- [ ] Emit an explicit `provider.switched` transition and preserve the failed
+  window's accepted-input/output watermarks; never silently replay accepted
+  audio or claim uninterrupted mid-utterance continuity.
 - [ ] Return safe normalized failure stage, retryability, and optional retry
   delay without raw provider payload.
 

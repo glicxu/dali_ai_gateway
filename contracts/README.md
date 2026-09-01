@@ -19,3 +19,15 @@ responses are informational and not client-selectable.
 content-free internal measurement envelope by
 `python -m scripts.export_openapi`. Its presence does not select a durable sink
 or make measurements authoritative for billing or quota.
+
+Realtime translation callers may select any non-empty subset of
+`source_transcript`, `target_transcript`, and `translated_audio` in the optional
+v1 `session.start.outputs` field. Omitting it preserves target transcript plus
+translated audio. Source transcript text is emitted with `transcript.*` events;
+translated text remains `translation.*`.
+
+The versioned v2 realtime schemas add monotonic input sequence numbers,
+window identifiers, accepted-input watermarks, normalized translated-audio
+events, and explicit provider-switch/terminal events. v2 automatic failover is
+Gateway-owned and occurs when opening the next approved 60/90/120-second
+window; accepted audio is not replayed.
