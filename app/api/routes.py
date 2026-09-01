@@ -509,7 +509,7 @@ async def _bridge_v2(
                     if time.monotonic() - window_started >= window_seconds:
                         previous_window_id = window_id
                         next_profile = (
-                            fallback_profile
+                            (profile if active_profile == fallback_profile else fallback_profile)
                             if alternate and fallback_profile is not None
                             else active_profile
                         )
