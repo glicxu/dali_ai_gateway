@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from app.core.config import DEFAULT_WORKLOAD_GRANTS, Settings
 from app.core.policy import PolicyGeneration, PolicyGenerationDocument, PolicyStore
+from app.services import _target_language_supported
 
 
 def _generation(generation_id: str, *, model: str) -> PolicyGeneration:
@@ -83,6 +84,92 @@ def test_grant_must_reference_known_profile() -> None:
         settings.policy_generation()
 
 
+def test_profile_supported_outputs_are_typed_and_unique() -> None:
+    generation = PolicyGeneration.from_document(
+        PolicyGenerationDocument.model_validate(
+            {
+                "generation_id": "generation-outputs",
+                "profiles": {
+                    "chat.interpret": {
+                        "capability": "realtime_translation",
+                        "provider": "gemini",
+                        "model": "live-translate",
+                        "supported_outputs": ["target_transcript", "translated_audio"],
+                    }
+                },
+                "grants": {
+                    "chat_server": {
+                        "products": ["chat"],
+                        "profiles": ["chat.interpret"],
+                        "capabilities": ["realtime_translation"],
+                    }
+                },
+            }
+        )
+    )
+    assert generation.profiles["chat.interpret"].supported_outputs == frozenset(
+        {"target_transcript", "translated_audio"}
+    )
+    with pytest.raises(ValidationError, match="supported outputs must be unique"):
+        PolicyGenerationDocument.model_validate(
+            {
+                "generation_id": "generation-duplicate-outputs",
+                "profiles": {
+                    "chat.interpret": {
+                        "capability": "realtime_translation",
+                        "provider": "gemini",
+                        "model": "live-translate",
+                        "supported_outputs": ["translated_audio", "translated_audio"],
+                    }
+                },
+                "grants": {
+                    "chat_server": {
+                        "products": ["chat"],
+                        "profiles": ["chat.interpret"],
+                        "capabilities": ["realtime_translation"],
+                    }
+                },
+            }
+        )
+
+
+def test_target_language_compatibility_accepts_locale_base_and_wildcard() -> None:
+    assert _target_language_supported(frozenset({"zh"}), "zh-CN")
+    assert _target_language_supported(frozenset({"zh-cn"}), "zh-CN")
+    assert not _target_language_supported(frozenset({"en"}), "zh-CN")
+    assert _target_language_supported(frozenset({"*"}), "any-Language")
+
+
+def test_profile_sample_rate_constraints_are_validated() -> None:
+    document = {
+        "generation_id": "generation-rates",
+        "profiles": {
+            "chat.interpret": {
+                "capability": "realtime_translation",
+                "provider": "gemini",
+                "model": "live-translate",
+                "supported_audio_sample_rates_hz": [24000],
+            }
+        },
+        "grants": {
+            "chat_server": {
+                "products": ["chat"],
+                "profiles": ["chat.interpret"],
+                "capabilities": ["realtime_translation"],
+            }
+        },
+    }
+    generation = PolicyGeneration.from_document(
+        PolicyGenerationDocument.model_validate(document)
+    )
+    assert generation.profiles[
+        "chat.interpret"
+    ].supported_audio_sample_rates_hz == frozenset({24000})
+    document["profiles"]["chat.interpret"]["supported_audio_sample_rates_hz"] = [8000]
+    with pytest.raises(ValidationError, match="sample rates are invalid"):
+        PolicyGenerationDocument.model_validate(document)
+
+
 def test_dali_chat_has_an_independent_optional_demo_grant() -> None:
     settings = Settings()
     generation = settings.policy_generation()
@@ -93,10 +180,10 @@ def test_dali_chat_has_an_independent_optional_demo_grant() -> None:
     assert grant.capabilities == frozenset(
         {
             "text_generation",
-                "audio_transcription",
-                "realtime_transcription",
-                "realtime_translation",
-                "speech_synthesis",
+            "audio_transcription",
+            "realtime_transcription",
+            "realtime_translation",
+            "speech_synthesis",
             "image_analysis",
             "video_analysis",
         }

@@ -42,6 +42,7 @@ class RealtimeEvent:
     content_type: str | None = None
     sample_rate_hz: int | None = None
     channels: int | None = None
+    sample_format: str | None = None
 
 
 class TextProvider(Protocol):

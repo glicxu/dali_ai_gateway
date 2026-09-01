@@ -60,3 +60,12 @@ def test_registry_isolates_routes_and_blocks_disabled_route() -> None:
         assert registry.snapshot("gemini.other").state == "configured"
 
     asyncio.run(exercise())
+
+
+def test_registry_reports_safe_retry_delay_only_for_open_circuit() -> None:
+    registry = CircuitRegistry(enabled=True, failure_threshold=1, open_seconds=10)
+    assert registry.retry_after_ms("openai.primary") is None
+    registry.record_failure("openai.primary")
+    retry_after = registry.retry_after_ms("openai.primary")
+    assert retry_after is not None
+    assert 0 < retry_after <= 10_000

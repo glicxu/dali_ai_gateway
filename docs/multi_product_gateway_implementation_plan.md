@@ -1,7 +1,9 @@
 # Dali AI Gateway Multi-Product Implementation Plan
 
-Status: G1 local foundation complete; G2 external-boundary implementation in
-progress; G3 local deploy/test boundary implemented
+Status: G1 local foundation complete; G2/G4/G5 local runtime boundaries
+implemented and verified; G3/G6 local deploy/test boundaries implemented.
+Platform ingestion conformance, shared multi-instance state, and environmental
+operations remain external gates.
 Design authority:
 [`multi_product_gateway_design.md`](multi_product_gateway_design.md)  
 Related agent boundary:
@@ -113,13 +115,13 @@ conformance fixtures pass in both repositories.
 
 | Slice | Status | Depends on | Production effect |
 |---|---|---|---|
-| G0 | Not started | None | None |
+| G0 | In progress (local inventory captured; approval decisions remain) | None | None |
 | G1 | Local foundation complete | G0 identifiers/contracts | Classroom-compatible policy/readiness hardening |
 | G2 | In progress | G1 | New workload/usage paths disabled initially |
 | G3 | In progress | G1 | Shared capacity policy disabled until state is approved |
-| G4 | In progress (batch speech only) | G1 | Realtime v2 remains disabled |
-| G5 | Not started | G3, G4 | Fallback disabled by default |
-| G6 | Not started | G2-G5 | Operational readiness only |
+| G4 | In progress (realtime pilot; full v2 contract incomplete) | G1 | Realtime v2 pilot enabled only for isolated AWS-US2 testing |
+| G5 | In progress (pilot failover implemented) | G3, G4 | Fallback remains restricted to approved test routes |
+| G6 | In progress (pilot runbook and automated gates) | G2-G5 | Operational readiness only; multi-instance gates remain |
 | G7 | Not started | G6 | Explicitly approved canary only |
 | A1 | Deferred/optional | G1-G6 | Separate agent-runtime pilot approval |
 
@@ -131,31 +133,33 @@ production distribution mechanism is implied.
 
 G2 includes an injected workload authenticator, disabled-by-default Platform
 RS256/JWKS verification, a caller-specific legacy adapter, a strict internal
-measurement model/JSON Schema, and an idempotent delivery interface. Production
-activation, a concrete durable sink, Platform ingestion conformance, and
-billing/quota authority remain blocked on the Platform MS2/MS3 contracts and
-the G0 issuer/audience/scope/sink decisions.
+measurement model/JSON Schema, and confirmed bounded delivery to the configured
+SQS Standard sink for batch and realtime terminal measurements. Platform relay
+ingestion conformance and billing/quota authority remain blocked on the
+Platform MS2/MS3 contracts and environmental issuer/audience/scope/queue values.
 
-The local measurement boundary now includes a lifecycle accumulator that emits
-one canonical terminal event for complete, partial, disconnected, cancelled,
-timed-out, provider-failed, and ambiguous outcomes. It is an interface/test
-slice only; request handlers do not treat it as billing or quota authority
-until Platform ingestion and durable-delivery ownership are approved.
+The local measurement boundary emits one canonical terminal event for complete,
+partial, disconnected, cancelled, timed-out, provider-failed, and ambiguous
+outcomes. Batch provider ambiguity is explicitly non-retryable. Realtime final
+delivery survives caller disconnect and records the final selected route plus
+fallback/rotation counts. Request handlers do not treat it as billing or quota
+authority until Platform ingestion conformance is approved.
 
 ### 5.1 Latest verified checkpoint
 
 Commit `f6bf256` establishes the multi-product foundation. Subsequent local
-G3 work adds bounded renewable admission leases, product/profile/route-aware
-batch admission, and isolated batch provider-route circuits. The Python 3.12
-quality gate currently passes with 97 tests, compilation, and the checked-in
-OpenAPI export matching generated output.
+work adds bounded renewable admission leases, product/profile/route-aware
+admission, isolated route circuits, realtime v2 failover and backpressure,
+content-free durable usage delivery, and graceful drain behavior. The current
+quality gate passes with 134 tests, compilation, and the checked-in OpenAPI
+export matching generated output.
 
 This checkpoint is deployable for isolated testing with
 `AI_GATEWAY_PROVIDER_CIRCUIT_ENABLED=false`, which preserves the released
 provider-routing behavior. Enabling process-local circuits is suitable only for
 single-instance evaluation. Shared admission/circuit storage, Host reserves,
-realtime v2, authoritative usage delivery, fallback, and multi-instance
-operations remain incomplete and block shared-production readiness.
+Platform ingestion conformance, and multi-instance operations remain incomplete
+and block shared-production readiness.
 
 ## 6. Cross-Cutting Engineering Rules
 
@@ -207,17 +211,17 @@ non-Classroom consumer, and freeze the shared identifiers before implementation.
 
 ### Identifier inventory
 
-- [ ] Inventory all current callers, service tokens, products, profiles,
+- [x] Inventory all current callers, service tokens, products, profiles,
   capabilities, providers, and model mappings without outputting secrets.
 - [ ] Define stable workload IDs for current Classroom call paths.
 - [ ] Define exact profile grants for Classroom and evaluation workloads.
-- [ ] Define the first pilot's product, workloads, capabilities, and profiles.
-- [ ] Define provider route IDs separately from stable profile names.
+- [x] Define the first pilot's product, workloads, capabilities, and profiles.
+- [x] Define provider route IDs separately from stable profile names.
 - [ ] Define capacity pool/reserve and usage-schema identifiers.
 
 ### Contract work
 
-- [ ] Document released Classroom v1 compatibility fixtures.
+- [x] Document released Classroom v1 compatibility fixtures.
 - [ ] Define exact workload/product/profile grant configuration/schema.
 - [ ] Define strict transport-only profile configuration and forbidden product-
   logic/content fields.
@@ -390,10 +394,10 @@ fixtures remain operator/external inputs and are not provisioned by this plan.
   content.
 - [x] Normalize missing/estimated provider usage explicitly; never fabricate
   exact values.
-- [~] Track received audio separately from audio accepted by the provider
+- [x] Track received audio separately from audio accepted by the provider
   adapter/transport; designate the exact contract field eligible for billing or
   quota policy.
-- [~] Distinguish provider-reported tokens/audio from Gateway estimates and
+- [x] Distinguish provider-reported tokens/audio from Gateway estimates and
   include the versioned estimation method when estimated.
 - [x] Finalize partial measurements for disconnect, timeout, cancellation,
   rotation, partial output, and ambiguous provider acceptance/charging.
@@ -403,16 +407,20 @@ fixtures remain operator/external inputs and are not provisioned by this plan.
 
 - [x] Implement the approved external durable content-free sink adapter for realtime
   measurements that must survive caller disconnect.
-- [ ] Implement exact batch response/product-relay behavior where approved.
-- [~] Permit duplicate relay of a received realtime final event only with the
+- [x] Implement exact batch delivery behavior through the configured durable
+  sink; a product-response relay remains an optional external contract.
+- [x] Permit duplicate relay of a received realtime final event only with the
   same measurement event ID so Platform deduplication is deterministic.
 - [ ] Make Platform ingestion idempotent by measurement event ID.
-- [~] Define behavior when measurement delivery fails before, during, or after
+- [x] Define behavior when measurement delivery fails before, during, or after
   provider work.
-- [ ] Prohibit silent measurement loss after incurred provider work.
+- [x] Prohibit silent measurement loss after incurred provider work when a sink
+  is configured; unconfigured profiles remain explicitly non-authoritative.
 - [ ] Keep realtime profiles without a durable sink non-authoritative for
   billing/quota and ineligible for shared-production readiness.
-- [ ] Add retry/reconciliation ownership without storing content in Gateway.
+- [~] Add retry/reconciliation ownership without storing content in Gateway
+  (bounded Gateway-to-SQS retry is implemented; relay DLQ/reconciliation is
+  externally owned).
 
 ### Cutover and verification
 
@@ -504,27 +512,35 @@ shared-state technology and degraded-mode policy are approved.
 
 ### Contract evolution
 
-- [ ] Preserve v1 Classroom WebSocket paths/events.
-- [ ] Add the approved versioned realtime contract rather than repurposing v1
+- [x] Preserve v1 Classroom WebSocket paths/events.
+- [x] Add the approved versioned realtime contract rather than repurposing v1
   fields.
-- [ ] Add request/session ID and monotonic sequence requirements.
-- [ ] Add negotiated modality/format/limit data to `session.ready`.
-- [ ] Add monotonically increasing input sequence numbers to `audio.append`.
-- [ ] Add `audio.accepted` with the highest contiguous sequence handed to the
+- [x] Add request/session ID and monotonic sequence requirements.
+- [x] Add negotiated modality/format/limit data to `session.ready`, including
+  decoded chunk bytes and the one-in-flight unacknowledged window.
+- [x] Add monotonically increasing input sequence numbers to `audio.append`.
+- [x] Add `audio.accepted` with the highest contiguous sequence handed to the
   active provider adapter/transport; document that this is not semantic provider
   completion.
-- [ ] Negotiate maximum chunk bytes and maximum unacknowledged chunks/bytes.
-- [ ] Add transcript and translation text delta/final events with stable item
+- [x] Negotiate maximum chunk bytes and maximum unacknowledged chunks/bytes
+  (the one-in-flight Gateway bridge limit is advertised and enforced; a larger
+  configurable client window is deferred).
+- [x] Add transcript and translation text delta/final events with stable item
   identity.
-- [ ] Add `translation.audio.delta/final` with response ID, sequence, target
-  language, codec, sample rate, channels, sample format, and disposition.
-- [ ] Add `usage.update/final`; `session.rotation_required` with deadline and
+- [~] Add `translation.audio.delta/final` with response ID, sequence, target
+  language, codec, sample rate, channels, sample format, and disposition
+  (normalized fields are emitted when known; provider conformance and required
+  codec/format negotiation remain).
+- [x] Add `usage.update/final`; `session.rotation_required` with deadline and
   last accepted input sequence; `session.closed` with disposition, accepted
   input watermark, and final output sequence; cancellation; and normalized
   failure-stage semantics.
-- [ ] Add a normalized `slow_consumer`/backpressure disposition and send-timeout
-  behavior.
-- [ ] Make unknown terminal events fail closed in clients/conformance fixtures.
+- [~] Add a normalized `slow_consumer`/backpressure disposition and send-timeout
+  behavior (v2 closes stalled callers with WebSocket code 1013; final
+  conformance coverage remains).
+- [~] Make unknown terminal events fail closed in clients/conformance fixtures
+  (Gateway closes unknown provider events with normalized final usage and a
+  provider-output failure; consumer conformance fixtures remain).
 
 ### Provider-neutral session behavior
 
@@ -537,23 +553,26 @@ Provider profiles that cannot supply a requested output fail before accepting
 content. This additive pilot does not complete or replace the versioned G4
 realtime v2 work below.
 
-- [ ] Extend provider base protocols without leaking native provider events.
-- [ ] Keep one source or one target-language lane per Gateway session.
-- [ ] Preserve product ownership of multi-target orchestration and partial
+- [x] Extend provider base protocols without leaking native provider events.
+- [x] Keep one source or one target-language lane per Gateway session.
+- [x] Preserve product ownership of multi-target orchestration and partial
   failure UX.
-- [ ] Forward translated audio transiently without assembling/persisting it.
+- [x] Forward translated audio transiently without assembling/persisting it.
 - [ ] Enforce per-chunk and per-session memory/duration ceilings.
-- [ ] Enforce bounded outbound event/byte queues and provider/caller send
-  timeouts.
-- [ ] Pause provider reading where safely supported; otherwise close a slow
-  consumer rather than silently dropping final text or translated-audio chunks.
+- [x] Enforce bounded outbound event/byte queues and provider/caller send
+  timeouts (one direct Gateway event in flight with a 5-second caller timeout;
+  byte-budgeted provider queues remain deferred).
+- [~] Pause provider reading where safely supported; otherwise close a slow
+  consumer rather than silently dropping final text or translated-audio chunks
+  (slow callers close with 1013; provider-specific pause support remains
+  deferred).
 - [ ] Permit delta coalescing only when contract tests prove it cannot alter
   final text/audio semantics.
-- [ ] Surface planned provider expiry as rotation, not generic outage.
-- [ ] After provider content acceptance, automatically close/mark the current
+- [x] Surface planned provider expiry as rotation, not generic outage.
+- [x] After provider content acceptance, automatically close/mark the current
   window and open the next approved fallback window in Gateway; do not require
   a product-client reconnect or silently replay accepted audio.
-- [ ] Return accepted-input/output watermarks for ordering, diagnostics, and
+- [x] Return accepted-input/output watermarks for ordering, diagnostics, and
   duplicate suppression. Replay of accepted audio is disabled for this design;
   enabling a replay tail requires a separate ADR.
 
@@ -571,19 +590,25 @@ realtime v2 work below.
 ### Verification
 
 - [ ] JSON Schema and example fixtures validate every event and terminal path.
-- [ ] Sequence/duplicate/gap handling passes conformance tests.
-- [ ] Input acknowledgment, unacknowledged-window enforcement, and replay
+- [x] Sequence/duplicate/gap handling passes conformance tests.
+- [x] Input acknowledgment, unacknowledged-window enforcement, and replay
   watermark pass loss/duplication simulations.
-- [ ] Slow-consumer tests bound memory and never silently omit final text/audio.
-- [ ] Rotation, clear, cancellation, disconnect, and timeout clear buffers.
-- [ ] Audio format/size violations fail without echoing content.
-- [ ] Provider adapters emit only normalized events.
-- [ ] Classroom v1 remains unchanged.
+- [~] Slow-consumer tests bound memory and never silently omit final text/audio
+  (direct-send timeout/1013 behavior is covered; provider-specific drain
+  conformance remains).
+- [~] Rotation, clear, cancellation, disconnect, and timeout clear buffers
+  (disconnect and cancellation covered; timeout/forced-drain coverage remains).
+- [x] Audio format/size violations fail without echoing content.
+- [x] Provider adapters emit only normalized events (Gateway enforces the
+  normalized allowlist and fails closed; adapter-specific fixtures remain).
+- [x] Classroom v1 remains unchanged.
 
 ### Exit gate
 
-- [ ] Fake-provider end-to-end v2 sessions pass text, audio, rotation, usage,
-  cancellation, and error scenarios.
+- [~] Fake-provider end-to-end v2 sessions pass text, audio, rotation, usage,
+  cancellation, and error scenarios (text, rotation, cancellation, and
+  provider-error final usage are covered; complete audio/error conformance is
+  still pending).
 - [ ] At least one approved provider adapter passes applicable conformance.
 - [ ] No product migration is implied.
 
@@ -591,41 +616,45 @@ realtime v2 work below.
 
 ### Route policy
 
-- [ ] Replace one provider/model mapping with an ordered typed route policy while
+- [x] Replace one provider/model mapping with an ordered typed route policy while
   preserving existing single-route Classroom configuration.
-- [ ] Encode capability, modality, language, privacy, output-contract, and usage
-  compatibility requirements.
-- [ ] Require product approval for every route candidate.
+- [x] Encode capability, modality, language, privacy, output-contract, and usage
+  compatibility requirements (profile-level realtime output, language, and
+  sample-rate compatibility are enforced; the remaining dimensions require
+  the shared route registry).
+- [x] Require product approval for every route candidate.
 - [ ] Keep fallback disabled per profile until compatibility fixtures pass.
 
 ### Failure semantics
 
-- [ ] Distinguish failure before provider acceptance, unambiguous no-result,
+- [x] Distinguish failure before provider acceptance, unambiguous no-result,
   ambiguous acceptance/charge, partial output, planned rotation, cancellation,
   and terminal provider failure.
-- [ ] Allow automatic provider fallback after realtime content acceptance only
+- [x] Allow automatic provider fallback after realtime content acceptance only
   at a design-approved window boundary. The Gateway, not the product client,
   opens the next window; no client reconnect is required.
-- [ ] Prohibit silent batch duplication after ambiguous outcomes.
-- [ ] Emit an explicit `provider.switched` transition and preserve the failed
+- [x] Prohibit silent batch duplication after ambiguous outcomes.
+- [x] Emit an explicit `provider.switched` transition and preserve the failed
   window's accepted-input/output watermarks; never silently replay accepted
   audio or claim uninterrupted mid-utterance continuity.
-- [ ] Return safe normalized failure stage, retryability, and optional retry
-  delay without raw provider payload.
+- [~] Return safe normalized failure stage, retryability, and optional retry
+  delay without raw provider payload (realtime terminal stages and local
+  circuit retry delay are implemented; provider-wide normalization remains).
 
 ### Circuit integration
 
-- [ ] Skip open/disabled routes before admission/provider work.
-- [ ] Update circuit state from normalized outcomes.
-- [ ] Keep fallback counts and selected route in content-free measurement.
-- [ ] Ensure a fallback route cannot weaken approved privacy/model terms.
+- [x] Skip open/disabled routes before admission/provider work.
+- [~] Update circuit state from normalized outcomes (startup and mid-session
+  failures implemented; recovery/drill coverage remains).
+- [x] Keep fallback counts and selected route in content-free measurement.
+- [x] Ensure a fallback route cannot weaken approved privacy/usage terms.
 
 ### Verification
 
-- [ ] Route ordering and selection are deterministic.
-- [ ] Text-only routes cannot replace audio-producing routes.
+- [x] Route ordering and selection are deterministic.
+- [x] Text-only routes cannot replace audio-producing routes.
 - [ ] Tool/structured-output capability cannot silently disappear.
-- [ ] Ambiguous failures never trigger automatic duplicate work.
+- [x] Ambiguous failures never trigger automatic duplicate work.
 - [ ] Circuit opening/recovery and kill switches pass concurrent tests.
 
 ### Exit gate
@@ -646,9 +675,9 @@ realtime v2 work below.
   regional independence.
 - [ ] Bound HTTP/provider/database/shared-state connection pools and overload
   behavior.
-- [ ] Verify graceful shutdown drains/rejects work within the configured window
+- [x] Verify graceful shutdown drains/rejects work within the configured window
   and clears transient buffers.
-- [ ] On planned drain, stop new admission and emit
+- [x] On planned drain, stop new admission and emit
   `session.rotation_required` with deadline/accepted-input watermark to active
   realtime callers before `session.closed` where possible.
 - [ ] Release shared leases and close provider sessions on normal and forced
@@ -656,7 +685,7 @@ realtime v2 work below.
 
 ### Observability
 
-- [ ] Add redacted metrics for admission, active leases, provider route outcome,
+- [~] Add redacted metrics for admission, active leases, provider route outcome,
   first/final/total latency, audio/token usage, rotation, fallback, WebSocket
   disposition, usage delivery, readiness, config generation, and key age.
 - [ ] Add product/profile/provider dashboards without user/content dimensions.

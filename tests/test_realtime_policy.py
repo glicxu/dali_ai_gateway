@@ -21,6 +21,10 @@ def test_windowed_failover_requires_distinct_fallback() -> None:
     )
 
     assert policy.window_seconds == 60
+    assert policy.ordered_profiles == (
+        "dali_chat.interpret.gemini",
+        "dali_chat.interpret.openai",
+    )
 
     with pytest.raises(ValidationError, match="requires fallback_profile"):
         RealtimeRoutePolicy(
@@ -45,6 +49,10 @@ def test_compare_requires_only_compare_profile() -> None:
     )
 
     assert policy.compare_profile == "dali_chat.interpret.openai"
+    assert policy.ordered_profiles == (
+        "dali_chat.interpret.gemini",
+        "dali_chat.interpret.openai",
+    )
 
     with pytest.raises(ValidationError, match="requires compare_profile"):
         RealtimeRoutePolicy(
@@ -59,4 +67,3 @@ def test_single_rejects_extra_route() -> None:
             primary_profile="dali_chat.interpret.gemini",
             fallback_profile="dali_chat.interpret.openai",
         )
-

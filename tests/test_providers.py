@@ -595,8 +595,15 @@ def test_openai_realtime_translation_protocol() -> None:
         audio = await realtime.next_event()
         assert audio.type == "translation.audio.delta"
         assert audio.audio == "AQI="
+        assert audio.item_id == "translation-1"
+        assert audio.content_type == "audio/pcm"
         assert audio.sample_rate_hz == 24000
-        assert (await realtime.next_event()).type == "translation.audio.final"
+        assert audio.channels == 1
+        assert audio.sample_format == "s16le"
+        audio_final = await realtime.next_event()
+        assert audio_final.type == "translation.audio.final"
+        assert audio_final.item_id == "translation-1"
+        assert audio_final.sample_format == "s16le"
         closed = await realtime.next_event()
         assert closed.type == "error"
         assert closed.code == "provider_connection_closed"
@@ -724,6 +731,11 @@ def test_gemini_live_transcription_and_translation_protocols() -> None:
         audio = await translation.next_event()
         assert audio.type == "translation.audio.delta"
         assert audio.audio == "AQI="
+        assert audio.item_id == "gemini-1"
+        assert audio.content_type == "audio/pcm;rate=24000"
+        assert audio.sample_rate_hz == 24000
+        assert audio.channels == 1
+        assert audio.sample_format == "s16le"
         assert (await translation.next_event()).text == "Tag."
         source_final = await translation.next_event()
         assert source_final.type == "transcript.final"
@@ -731,7 +743,11 @@ def test_gemini_live_transcription_and_translation_protocols() -> None:
         final = await translation.next_event()
         assert final.type == "translation.final"
         assert final.text == "Guten Tag."
-        assert (await translation.next_event()).type == "translation.audio.final"
+        audio_final = await translation.next_event()
+        assert audio_final.type == "translation.audio.final"
+        assert audio_final.item_id == "gemini-1"
+        assert audio_final.content_type == "audio/pcm;rate=24000"
+        assert audio_final.sample_format == "s16le"
         closed = await translation.next_event()
         assert closed.type == "error"
         assert closed.code == "provider_connection_closed"

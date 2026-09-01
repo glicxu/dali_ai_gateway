@@ -1,0 +1,16 @@
+{
+  "type": "session.start",
+  "request_id": "1f6f1f8f-6b2d-4bb8-9a1d-1f8c9a9f4f5e",
+  "product": "dali_chat",
+  "profile": "dali_chat.interpret.openai",
+  "fallback_profile": "dali_chat.interpret.gemini",
+  "target_language": "zh",
+  "policy": "windowed_failover",
+  "window_seconds": 90,
+  "outputs": [
+    "source_transcript",
+    "target_transcript",
+    "translated_audio"
+  ],
+  "audio_sample_rate_hz": 24000
+}

@@ -8,9 +8,12 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
+from starlette.websockets import WebSocketDisconnect
 
+from app.api.routes import _send_realtime_event
 from app.core.config import DEFAULT_WORKLOAD_GRANTS, Settings
 from app.core.security import WorkloadPrincipal
+from app.core.usage_delivery import UsageDelivery
 from app.main import create_app
 from app.models import RealtimeTranslationStart
 from app.providers.base import RealtimeEvent
@@ -75,9 +78,139 @@ class _FailoverProvider(FakeProvider):
         return self._sessions.pop(0)
 
 
+class _PlannedRotationSession:
+    def __init__(self) -> None:
+        self.closed = False
+        self._rotation_sent = False
+        self._wait = asyncio.Event()
+
+    async def append(self, _: str) -> None:
+        return None
+
+    async def commit(self) -> None:
+        return None
+
+    async def clear(self) -> None:
+        return None
+
+    async def next_event(self) -> RealtimeEvent:
+        if not self._rotation_sent:
+            self._rotation_sent = True
+            return RealtimeEvent("error", code="provider_session_rotation_required")
+        await self._wait.wait()
+        raise AssertionError("planned rotation session should be closed")
+
+    async def close(self) -> None:
+        self.closed = True
+        self._wait.set()
+
+
+class _PlannedRotationProvider(FakeProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.planned_rotation = _PlannedRotationSession()
+        self._sessions = [self.planned_rotation, self.realtime_translation]
+
+    async def open_realtime_translation(self, **kwargs):
+        self.realtime_translation_outputs.append(kwargs["outputs"])
+        return self._sessions.pop(0)
+
+
+class _SlowWebSocket:
+    def __init__(self) -> None:
+        self.closed: tuple[int, str] | None = None
+        self._never = asyncio.Event()
+
+    async def send_json(self, _: dict[str, object]) -> None:
+        await self._never.wait()
+
+    async def close(self, *, code: int, reason: str) -> None:
+        self.closed = (code, reason)
+
+
+class _CaptureUsageSink:
+    def __init__(self) -> None:
+        self.measurements = []
+
+    async def put(self, measurement):
+        self.measurements.append(measurement)
+        return "accepted"
+
+
+class _FailingUsageSink:
+    async def put(self, measurement):
+        del measurement
+        raise RuntimeError("sink unavailable")
+
+
+class _FailingTextProvider(FakeProvider):
+    async def generate(self, **kwargs):
+        del kwargs
+        raise RuntimeError("provider outcome unavailable")
+
+
 def test_health_and_readiness(client: TestClient) -> None:
     assert client.get("/health/live").json() == {"status": "ok"}
-    assert client.get("/health/ready").json() == {"status": "ready"}
+    readiness = client.get("/health/ready").json()
+    assert readiness["status"] == "ready"
+    assert readiness["draining"] is False
+    assert readiness["active_leases"] == 0
+    assert "generation_id" in readiness
+    assert "provider_counts" in readiness
+    metrics = client.get("/metrics")
+    assert metrics.status_code == 200
+    assert "dali_gateway_ready 1" in metrics.text
+    assert "dali_gateway_active_leases 0" in metrics.text
+    assert "Private lecture" not in metrics.text
+
+
+def test_drain_rejects_new_work_and_removes_readiness(
+    client: TestClient, headers: dict[str, str]
+) -> None:
+    client.app.state.container.begin_drain()
+    assert client.get("/health/live").status_code == 200
+    assert client.get("/health/ready").status_code == 503
+    response = client.post(
+        "/ai/v1/text/generations",
+        headers=headers,
+        json={
+            "request_id": str(uuid4()),
+            "product": "classroom",
+            "profile": "classroom.translation.economy",
+            "system_instruction": "Translate faithfully.",
+            "input": "Private lecture text.",
+        },
+    )
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "ai_gateway_draining"
+
+
+def test_planned_drain_rotates_and_closes_active_realtime_session(
+    client: TestClient, headers: dict[str, str], fake_provider: FakeProvider
+) -> None:
+    with client.websocket_connect(
+        "/ai/v2/realtime/translations", headers=headers
+    ) as socket:
+        socket.send_json(
+            {
+                "type": "session.start",
+                "request_id": str(uuid4()),
+                "product": "classroom",
+                "profile": "classroom.translation.live",
+                "target_language": "de-DE",
+            }
+        )
+        assert socket.receive_json()["type"] == "session.ready"
+        client.app.state.container.begin_drain()
+        rotation = socket.receive_json()
+        assert rotation["type"] == "session.rotation_required"
+        assert rotation["accepted_sequence"] == 0
+        assert socket.receive_json()["type"] == "usage.final"
+        closed = socket.receive_json()
+        assert closed["type"] == "session.closed"
+        assert closed["failure_stage"] == "gateway"
+        assert closed["retryable"] is True
+    assert fake_provider.realtime_translation.closed_event.wait(timeout=1)
 
 
 def test_readiness_uses_cached_health_without_synchronous_probe(
@@ -116,6 +249,97 @@ def test_text_generation_is_service_authenticated_and_profile_routed(
         "usage": {"input_tokens": 7, "output_tokens": 3, "audio_ms": None},
     }
     assert fake_provider.generated_inputs == ["Private lecture text."]
+
+
+def test_batch_text_generation_delivers_content_free_usage(
+    client: TestClient, headers: dict[str, str]
+) -> None:
+    sink = _CaptureUsageSink()
+    client.app.state.container.service.usage_delivery = UsageDelivery(
+        sink, max_attempts=1, retry_delay_seconds=0
+    )
+    request_id = str(uuid4())
+    response = client.post(
+        "/ai/v1/text/generations",
+        headers=headers,
+        json={
+            "request_id": request_id,
+            "product": "classroom",
+            "profile": "classroom.translation.economy",
+            "system_instruction": "Translate faithfully.",
+            "input": "Private lecture text.",
+        },
+    )
+    assert response.status_code == 200
+    assert len(sink.measurements) == 1
+    measurement = sink.measurements[0]
+    assert str(measurement.request_id) == request_id
+    assert measurement.input_tokens.value == 7
+    assert measurement.output_tokens.value == 3
+    serialized = measurement.model_dump_json()
+    assert "Private lecture" not in serialized
+    assert "Translate faithfully" not in serialized
+    metrics = client.get("/metrics").text
+    assert 'dali_gateway_events_total{outcome="usage_delivery_accepted"} 1' in metrics
+    assert "Private lecture" not in metrics
+
+
+def test_batch_usage_failure_is_explicit_and_non_retryable(
+    client: TestClient, headers: dict[str, str], fake_provider: FakeProvider
+) -> None:
+    client.app.state.container.service.usage_delivery = UsageDelivery(
+        _FailingUsageSink(), max_attempts=1, retry_delay_seconds=0
+    )
+    response = client.post(
+        "/ai/v1/text/generations",
+        headers=headers,
+        json={
+            "request_id": str(uuid4()),
+            "product": "classroom",
+            "profile": "classroom.translation.economy",
+            "system_instruction": "Translate faithfully.",
+            "input": "Private lecture text.",
+        },
+    )
+    assert response.status_code == 503
+    assert response.json()["error"] == {
+        "code": "ai_gateway_usage_delivery_unconfirmed",
+        "message": "AI work completed but usage delivery was not confirmed.",
+        "retryable": False,
+        "retry_after_ms": None,
+    }
+    assert fake_provider.generated_inputs == ["Private lecture text."]
+
+
+def test_ambiguous_batch_provider_outcome_is_measured_and_not_retryable(
+    headers: dict[str, str], settings: Settings
+) -> None:
+    sink = _CaptureUsageSink()
+    application = create_app(
+        settings,
+        providers={"gemini": _FailingTextProvider(), "openai": FakeProvider()},
+    )
+    application.state.container.service.usage_delivery = UsageDelivery(
+        sink, max_attempts=1, retry_delay_seconds=0
+    )
+    with TestClient(application) as value:
+        response = value.post(
+            "/ai/v1/text/generations",
+            headers=headers,
+            json={
+                "request_id": str(uuid4()),
+                "product": "classroom",
+                "profile": "classroom.translation.economy",
+                "system_instruction": "Translate faithfully.",
+                "input": "Private lecture text.",
+            },
+        )
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "ai_gateway_provider_outcome_ambiguous"
+    assert response.json()["error"]["retryable"] is False
+    assert len(sink.measurements) == 1
+    assert sink.measurements[0].disposition == "ambiguous"
+    assert "Private lecture" not in sink.measurements[0].model_dump_json()
 
 
 def test_disabled_provider_route_fails_before_provider_work(
@@ -505,7 +729,8 @@ def test_realtime_translation_bridge(
         )
         assert socket.receive_json()["type"] == "session.ready"
         socket.send_json({"type": "audio.append", "audio": "AQI="})
-        assert socket.receive_json()["type"] == "translation.delta"
+        translated = socket.receive_json()
+        assert translated["type"] == "translation.delta"
         socket.send_json({"type": "session.stop"})
     assert fake_provider.realtime_translation.appended == ["AQI="]
     assert fake_provider.realtime_translation_outputs == [
@@ -535,6 +760,64 @@ def test_realtime_v2_single_contract_acknowledges_input(
     headers: dict[str, str],
     fake_provider: FakeProvider,
 ) -> None:
+    sink = _CaptureUsageSink()
+    client.app.state.container.service.usage_delivery = UsageDelivery(
+        sink, max_attempts=1, retry_delay_seconds=0
+    )
+    request_id = str(uuid4())
+    with client.websocket_connect(
+        "/ai/v2/realtime/translations", headers=headers
+    ) as socket:
+        socket.send_json(
+            {
+                "type": "session.start",
+                "request_id": request_id,
+                "product": "classroom",
+                "profile": "classroom.translation.live",
+                "target_language": "de-DE",
+            }
+        )
+        ready = socket.receive_json()
+        assert ready["type"] == "session.ready"
+        assert ready["sequence"] == 0
+        assert ready["session_id"] == ready["request_id"]
+        assert ready["lane_id"] == "primary"
+        assert ready["provider_ref"] == "classroom.translation.live"
+        socket.send_json({"type": "audio.append", "sequence": 1, "audio": "AQI="})
+        accepted = socket.receive_json()
+        assert accepted["type"] == "audio.accepted"
+        assert accepted["accepted_sequence"] == 1
+        assert accepted["session_id"] == ready["session_id"]
+        assert accepted["provider_ref"] == ready["provider_ref"]
+        translated = socket.receive_json()
+        assert translated["type"] == "translation.delta"
+        socket.send_json({"type": "session.stop"})
+        usage = socket.receive_json()
+        assert usage["type"] == "usage.final"
+        assert usage["accepted_input_chunks"] == 1
+        closed = socket.receive_json()
+        assert closed["type"] == "session.closed"
+        assert closed["disposition"] == "cancelled"
+        assert [
+            ready["sequence"],
+            accepted["sequence"],
+            translated["sequence"],
+            usage["sequence"],
+            closed["sequence"],
+        ] == [0, 1, 2, 3, 4]
+    assert fake_provider.realtime_translation.closed_event.wait(timeout=1)
+    assert len(sink.measurements) == 1
+    measurement = sink.measurements[0]
+    assert str(measurement.request_id) == request_id
+    assert measurement.disposition == "cancelled"
+    assert measurement.source_audio_received_bytes.value == 2
+    assert measurement.source_audio_accepted_bytes.value == 2
+    assert measurement.route_id == "openai.gpt-realtime-translate"
+
+
+def test_realtime_v2_rejects_duplicate_input_sequence(
+    client: TestClient, headers: dict[str, str], fake_provider: FakeProvider
+) -> None:
     with client.websocket_connect(
         "/ai/v2/realtime/translations", headers=headers
     ) as socket:
@@ -547,16 +830,62 @@ def test_realtime_v2_single_contract_acknowledges_input(
                 "target_language": "de-DE",
             }
         )
-        ready = socket.receive_json()
-        assert ready["type"] == "session.ready"
-        assert ready["sequence"] == 0
+        socket.receive_json()
         socket.send_json({"type": "audio.append", "sequence": 1, "audio": "AQI="})
-        accepted = socket.receive_json()
-        assert accepted["type"] == "audio.accepted"
-        assert accepted["accepted_sequence"] == 1
+        assert socket.receive_json()["type"] == "audio.accepted"
         assert socket.receive_json()["type"] == "translation.delta"
-        socket.send_json({"type": "session.stop"})
+        socket.send_json({"type": "audio.append", "sequence": 1, "audio": "AQI="})
+        error = socket.receive_json()
+        assert error["type"] == "error"
+        assert error["error"]["code"] == "ai_gateway_request_invalid"
+        assert fake_provider.realtime_translation.appended == ["AQI="]
+
+
+def test_realtime_v2_rejects_input_sequence_gap(
+    client: TestClient, headers: dict[str, str]
+) -> None:
+    with client.websocket_connect(
+        "/ai/v2/realtime/translations", headers=headers
+    ) as socket:
+        socket.send_json(
+            {
+                "type": "session.start",
+                "request_id": str(uuid4()),
+                "product": "classroom",
+                "profile": "classroom.translation.live",
+                "target_language": "de-DE",
+            }
+        )
+        socket.receive_json()
+        socket.send_json({"type": "audio.append", "sequence": 2, "audio": "AQI="})
+        error = socket.receive_json()
+        assert error["type"] == "error"
+        assert error["error"]["code"] == "ai_gateway_request_invalid"
+
+
+def test_realtime_v2_disconnect_closes_provider_session(
+    client: TestClient, headers: dict[str, str], fake_provider: FakeProvider
+) -> None:
+    sink = _CaptureUsageSink()
+    client.app.state.container.service.usage_delivery = UsageDelivery(
+        sink, max_attempts=1, retry_delay_seconds=0
+    )
+    with client.websocket_connect(
+        "/ai/v2/realtime/translations", headers=headers
+    ) as socket:
+        socket.send_json(
+            {
+                "type": "session.start",
+                "request_id": str(uuid4()),
+                "product": "classroom",
+                "profile": "classroom.translation.live",
+                "target_language": "de-DE",
+            }
+        )
+        assert socket.receive_json()["type"] == "session.ready"
     assert fake_provider.realtime_translation.closed_event.wait(timeout=1)
+    assert len(sink.measurements) == 1
+    assert sink.measurements[0].disposition == "disconnected"
 
 
 def test_realtime_v2_rejects_unimplemented_comparison_policy(
@@ -590,7 +919,13 @@ def test_realtime_v2_automatically_fails_over_at_provider_error() -> None:
         caller_limits_json='{"dali_chat_server":1}',
         legacy_auth_workload_ids_json='["dali_chat_server"]',
     )
-    application = create_app(settings, providers={"openai": provider, "gemini": provider})
+    application = create_app(
+        settings, providers={"openai": provider, "gemini": provider}
+    )
+    sink = _CaptureUsageSink()
+    application.state.container.service.usage_delivery = UsageDelivery(
+        sink, max_attempts=1, retry_delay_seconds=0
+    )
     headers = {
         "Authorization": "Bearer chat-test-token",
         "X-Dali-Caller": "dali_chat_server",
@@ -610,12 +945,21 @@ def test_realtime_v2_automatically_fails_over_at_provider_error() -> None:
                     "target_language": "zh-CN",
                 }
             )
-            assert socket.receive_json()["type"] == "session.ready"
+            ready = socket.receive_json()
+            assert ready["type"] == "session.ready"
+            assert ready["audio_sample_rate_hz"] == 24000
+            assert ready["outputs"] == ["target_transcript", "translated_audio"]
+            assert ready["max_chunk_bytes"] == 256 * 1024
+            assert ready["max_unacknowledged_chunks"] == 1
+            assert ready["max_unacknowledged_bytes"] == 256 * 1024
+            assert ready["max_outbound_events"] == 1
             socket.send_json({"type": "audio.append", "sequence": 1, "audio": "AQI="})
             events = [socket.receive_json(), socket.receive_json()]
             if events[0]["type"] != "window.failed":
                 events.append(socket.receive_json())
-            assert any(event["type"] == "window.failed" for event in events)
+            failed = next(event for event in events if event["type"] == "window.failed")
+            assert failed["failure_stage"] == "provider_stream"
+            assert failed["partial"] is True
             switched = next(
                 event for event in events if event["type"] == "provider.switched"
             )
@@ -625,4 +969,424 @@ def test_realtime_v2_automatically_fails_over_at_provider_error() -> None:
             socket.send_json({"type": "audio.append", "sequence": 2, "audio": "AQI="})
             assert socket.receive_json()["type"] == "audio.accepted"
             assert socket.receive_json()["type"] == "translation.delta"
+            # Accepted audio from the failed window is never replayed.
+            assert provider.realtime_translation.appended == ["AQI="]
             socket.send_json({"type": "session.stop"})
+            assert socket.receive_json()["type"] == "usage.final"
+            assert socket.receive_json()["type"] == "session.closed"
+    assert len(sink.measurements) == 1
+    assert sink.measurements[0].fallback_count == 1
+    assert sink.measurements[0].route_id == "gemini.gemini-3.5-live-translate-preview"
+
+
+def test_realtime_v2_rejects_oversized_audio_before_provider_append() -> None:
+    provider = FakeProvider()
+    grants = copy.deepcopy(DEFAULT_WORKLOAD_GRANTS["dali_chat_server"])
+    grants["enabled"] = True
+    settings = Settings(
+        service_tokens_json=SecretStr('{"dali_chat_server":"chat-test-token"}'),
+        workload_grants_json=json.dumps({"dali_chat_server": grants}),
+        caller_limits_json='{"dali_chat_server":1}',
+        legacy_auth_workload_ids_json='["dali_chat_server"]',
+    )
+    application = create_app(
+        settings, providers={"openai": provider, "gemini": provider}
+    )
+    headers = {
+        "Authorization": "Bearer chat-test-token",
+        "X-Dali-Caller": "dali_chat_server",
+    }
+    with TestClient(application) as client:
+        with client.websocket_connect(
+            "/ai/v2/realtime/translations", headers=headers
+        ) as socket:
+            socket.send_json(
+                {
+                    "type": "session.start",
+                    "request_id": str(uuid4()),
+                    "product": "dali_chat",
+                    "profile": "dali_chat.interpret.openai",
+                    "target_language": "zh-CN",
+                }
+            )
+            assert socket.receive_json()["type"] == "session.ready"
+            socket.send_json(
+                {"type": "audio.append", "sequence": 1, "audio": "A" * (256 * 1024 + 1)}
+            )
+            error = socket.receive_json()
+            assert error["error"]["code"] == "ai_gateway_request_invalid"
+            assert provider.realtime_translation.appended == []
+
+
+def test_realtime_v2_planned_provider_expiry_rotates_without_failure() -> None:
+    provider = _PlannedRotationProvider()
+    grants = copy.deepcopy(DEFAULT_WORKLOAD_GRANTS["dali_chat_server"])
+    grants["enabled"] = True
+    settings = Settings(
+        service_tokens_json=SecretStr('{"dali_chat_server":"chat-test-token"}'),
+        workload_grants_json=json.dumps({"dali_chat_server": grants}),
+        caller_limits_json='{"dali_chat_server":1}',
+        legacy_auth_workload_ids_json='["dali_chat_server"]',
+    )
+    application = create_app(
+        settings, providers={"openai": provider, "gemini": provider}
+    )
+    headers = {
+        "Authorization": "Bearer chat-test-token",
+        "X-Dali-Caller": "dali_chat_server",
+    }
+    with TestClient(application) as client:
+        with client.websocket_connect(
+            "/ai/v2/realtime/translations", headers=headers
+        ) as socket:
+            socket.send_json(
+                {
+                    "type": "session.start",
+                    "request_id": str(uuid4()),
+                    "product": "dali_chat",
+                    "profile": "dali_chat.interpret.openai",
+                    "target_language": "zh-CN",
+                }
+            )
+            assert socket.receive_json()["type"] == "session.ready"
+            rotation = socket.receive_json()
+            closed = socket.receive_json()
+            assert rotation["type"] == "session.rotation_required"
+            assert closed["type"] == "window.closed"
+            assert closed["disposition"] == "complete"
+            assert provider.planned_rotation.closed
+            socket.send_json({"type": "audio.append", "sequence": 1, "audio": "AQI="})
+            assert socket.receive_json()["type"] == "audio.accepted"
+            assert socket.receive_json()["type"] == "translation.delta"
+            socket.send_json({"type": "session.stop"})
+
+
+def test_realtime_outbound_send_timeout_closes_slow_consumer() -> None:
+    async def exercise() -> None:
+        websocket = _SlowWebSocket()
+        with pytest.raises(WebSocketDisconnect) as captured:
+            await _send_realtime_event(
+                websocket, {"type": "translation.delta"}, timeout_seconds=0.001
+            )
+        assert captured.value.code == 1013
+        assert websocket.closed == (1013, "slow_consumer")
+
+    asyncio.run(exercise())
+
+
+def test_realtime_v2_unknown_provider_event_fails_closed() -> None:
+    provider = FakeProvider()
+    provider.realtime_translation.events.put_nowait(RealtimeEvent("provider.unknown"))
+    grants = copy.deepcopy(DEFAULT_WORKLOAD_GRANTS["dali_chat_server"])
+    grants["enabled"] = True
+    settings = Settings(
+        service_tokens_json=SecretStr('{"dali_chat_server":"chat-test-token"}'),
+        workload_grants_json=json.dumps({"dali_chat_server": grants}),
+        caller_limits_json='{"dali_chat_server":1}',
+        legacy_auth_workload_ids_json='["dali_chat_server"]',
+    )
+    application = create_app(
+        settings, providers={"openai": provider, "gemini": provider}
+    )
+    headers = {
+        "Authorization": "Bearer chat-test-token",
+        "X-Dali-Caller": "dali_chat_server",
+    }
+    with TestClient(application) as client:
+        with client.websocket_connect(
+            "/ai/v2/realtime/translations", headers=headers
+        ) as socket:
+            socket.send_json(
+                {
+                    "type": "session.start",
+                    "request_id": str(uuid4()),
+                    "product": "dali_chat",
+                    "profile": "dali_chat.interpret.openai",
+                    "target_language": "zh-CN",
+                }
+            )
+            assert socket.receive_json()["type"] == "session.ready"
+            assert socket.receive_json()["type"] == "usage.final"
+            closed = socket.receive_json()
+            assert closed["type"] == "session.closed"
+            assert closed["failure_stage"] == "provider_output"
+            assert closed["retryable"] is False
+
+
+def test_realtime_v2_forwards_normalized_translated_audio_metadata() -> None:
+    provider = FakeProvider()
+    provider.realtime_translation.events.put_nowait(
+        RealtimeEvent(
+            "translation.audio.delta",
+            audio="AQI=",
+            item_id="provider-response-1",
+            content_type="audio/pcm",
+            sample_rate_hz=24000,
+            channels=1,
+            sample_format="s16le",
+        )
+    )
+    grants = copy.deepcopy(DEFAULT_WORKLOAD_GRANTS["dali_chat_server"])
+    grants["enabled"] = True
+    settings = Settings(
+        service_tokens_json=SecretStr('{"dali_chat_server":"chat-test-token"}'),
+        workload_grants_json=json.dumps({"dali_chat_server": grants}),
+        caller_limits_json='{"dali_chat_server":1}',
+        legacy_auth_workload_ids_json='["dali_chat_server"]',
+    )
+    application = create_app(
+        settings, providers={"openai": provider, "gemini": provider}
+    )
+    headers = {
+        "Authorization": "Bearer chat-test-token",
+        "X-Dali-Caller": "dali_chat_server",
+    }
+    with TestClient(application) as client:
+        with client.websocket_connect(
+            "/ai/v2/realtime/translations", headers=headers
+        ) as socket:
+            socket.send_json(
+                {
+                    "type": "session.start",
+                    "request_id": str(uuid4()),
+                    "product": "dali_chat",
+                    "profile": "dali_chat.interpret.openai",
+                    "target_language": "zh-CN",
+                }
+            )
+            assert socket.receive_json()["type"] == "session.ready"
+            audio = socket.receive_json()
+            assert audio["type"] == "translation.audio.delta"
+            assert audio["response_id"] == "provider-response-1"
+            assert audio["target_language"] == "zh-CN"
+            assert audio["content_type"] == "audio/pcm"
+            assert audio["sample_rate_hz"] == 24000
+            assert audio["channels"] == 1
+            assert audio["sample_format"] == "s16le"
+            socket.send_json({"type": "session.stop"})
+
+
+def test_realtime_v2_fails_closed_when_provider_ignores_output_selection() -> None:
+    provider = FakeProvider()
+    provider.realtime_translation.events.put_nowait(
+        RealtimeEvent("transcript.delta", text="must-not-forward", item_id="source-1")
+    )
+    grants = copy.deepcopy(DEFAULT_WORKLOAD_GRANTS["dali_chat_server"])
+    grants["enabled"] = True
+    settings = Settings(
+        service_tokens_json=SecretStr('{"dali_chat_server":"chat-test-token"}'),
+        workload_grants_json=json.dumps({"dali_chat_server": grants}),
+        caller_limits_json='{"dali_chat_server":1}',
+        legacy_auth_workload_ids_json='["dali_chat_server"]',
+    )
+    application = create_app(
+        settings, providers={"openai": provider, "gemini": provider}
+    )
+    headers = {
+        "Authorization": "Bearer chat-test-token",
+        "X-Dali-Caller": "dali_chat_server",
+    }
+    with TestClient(application) as client:
+        with client.websocket_connect(
+            "/ai/v2/realtime/translations", headers=headers
+        ) as socket:
+            socket.send_json(
+                {
+                    "type": "session.start",
+                    "request_id": str(uuid4()),
+                    "product": "dali_chat",
+                    "profile": "dali_chat.interpret.openai",
+                    "target_language": "zh-CN",
+                    "outputs": ["target_transcript"],
+                }
+            )
+            assert socket.receive_json()["type"] == "session.ready"
+            assert socket.receive_json()["type"] == "usage.final"
+            closed = socket.receive_json()
+            assert closed["type"] == "session.closed"
+            assert closed["failure_stage"] == "provider_output"
+
+
+def test_realtime_v2_provider_terminal_event_has_failure_stage() -> None:
+    provider = _FailoverProvider()
+    grants = copy.deepcopy(DEFAULT_WORKLOAD_GRANTS["dali_chat_server"])
+    grants["enabled"] = True
+    settings = Settings(
+        service_tokens_json=SecretStr('{"dali_chat_server":"chat-test-token"}'),
+        workload_grants_json=json.dumps({"dali_chat_server": grants}),
+        caller_limits_json='{"dali_chat_server":1}',
+        legacy_auth_workload_ids_json='["dali_chat_server"]',
+    )
+    application = create_app(
+        settings, providers={"openai": provider, "gemini": provider}
+    )
+    headers = {
+        "Authorization": "Bearer chat-test-token",
+        "X-Dali-Caller": "dali_chat_server",
+    }
+    with TestClient(application) as client:
+        with client.websocket_connect(
+            "/ai/v2/realtime/translations", headers=headers
+        ) as socket:
+            socket.send_json(
+                {
+                    "type": "session.start",
+                    "request_id": str(uuid4()),
+                    "product": "dali_chat",
+                    "profile": "dali_chat.interpret.openai",
+                    "target_language": "zh-CN",
+                }
+            )
+            assert socket.receive_json()["type"] == "session.ready"
+            socket.send_json({"type": "audio.append", "sequence": 1, "audio": "AQI="})
+            assert socket.receive_json()["type"] == "audio.accepted"
+            assert socket.receive_json()["type"] == "window.failed"
+            usage = socket.receive_json()
+            assert usage["type"] == "usage.final"
+            assert usage["accepted_input_chunks"] == 1
+            closed = socket.receive_json()
+            assert closed["type"] == "session.closed"
+            assert closed["failure_stage"] == "provider_stream"
+            assert closed["retryable"] is True
+
+
+def test_realtime_v2_rejects_fallback_alias_of_primary_route() -> None:
+    profiles = {
+        "chat.interpret.primary": {
+            "capability": "realtime_translation",
+            "provider": "openai",
+            "model": "gpt-realtime-translate",
+        },
+        "chat.interpret.alias": {
+            "capability": "realtime_translation",
+            "provider": "openai",
+            "model": "gpt-realtime-translate",
+        },
+    }
+    grants = {
+        "dali_chat_server": {
+            "products": ["dali_chat"],
+            "profiles": list(profiles),
+            "capabilities": ["realtime_translation"],
+        }
+    }
+    settings = Settings(
+        service_tokens_json=SecretStr('{"dali_chat_server":"chat-test-token"}'),
+        model_profiles_json=json.dumps(profiles),
+        workload_grants_json=json.dumps(grants),
+        caller_limits_json='{"dali_chat_server":1}',
+        legacy_auth_workload_ids_json='["dali_chat_server"]',
+    )
+    application = create_app(settings, providers={"openai": FakeProvider()})
+    headers = {
+        "Authorization": "Bearer chat-test-token",
+        "X-Dali-Caller": "dali_chat_server",
+    }
+    with TestClient(application) as client:
+        with client.websocket_connect(
+            "/ai/v2/realtime/translations", headers=headers
+        ) as socket:
+            socket.send_json(
+                {
+                    "type": "session.start",
+                    "request_id": str(uuid4()),
+                    "product": "dali_chat",
+                    "profile": "chat.interpret.primary",
+                    "fallback_profile": "chat.interpret.alias",
+                    "policy": "windowed_failover",
+                    "target_language": "zh-CN",
+                }
+            )
+            error = socket.receive_json()
+            assert error["error"]["code"] == "ai_gateway_profile_not_allowed"
+
+
+@pytest.mark.parametrize(
+    ("fallback_field", "fallback_value"),
+    [("privacy_class", "restricted"), ("usage_authority", "authoritative")],
+)
+def test_realtime_v2_rejects_fallback_that_weakens_route_terms(
+    fallback_field: str, fallback_value: str
+) -> None:
+    profiles = {
+        "chat.interpret.primary": {
+            "capability": "realtime_translation",
+            "provider": "openai",
+            "model": "gpt-realtime-translate",
+        },
+        "chat.interpret.fallback": {
+            "capability": "realtime_translation",
+            "provider": "gemini",
+            "model": "gemini-live-translate",
+            fallback_field: fallback_value,
+        },
+    }
+    grants = {
+        "dali_chat_server": {
+            "products": ["dali_chat"],
+            "profiles": list(profiles),
+            "capabilities": ["realtime_translation"],
+        }
+    }
+    settings = Settings(
+        service_tokens_json=SecretStr('{"dali_chat_server":"chat-test-token"}'),
+        model_profiles_json=json.dumps(profiles),
+        workload_grants_json=json.dumps(grants),
+        caller_limits_json='{"dali_chat_server":1}',
+        legacy_auth_workload_ids_json='["dali_chat_server"]',
+    )
+    application = create_app(
+        settings, providers={"openai": FakeProvider(), "gemini": FakeProvider()}
+    )
+    headers = {
+        "Authorization": "Bearer chat-test-token",
+        "X-Dali-Caller": "dali_chat_server",
+    }
+    with TestClient(application) as client:
+        with client.websocket_connect(
+            "/ai/v2/realtime/translations", headers=headers
+        ) as socket:
+            socket.send_json(
+                {
+                    "type": "session.start",
+                    "request_id": str(uuid4()),
+                    "product": "dali_chat",
+                    "profile": "chat.interpret.primary",
+                    "fallback_profile": "chat.interpret.fallback",
+                    "policy": "windowed_failover",
+                    "target_language": "zh-CN",
+                }
+            )
+            error = socket.receive_json()
+            assert error["error"]["code"] == "ai_gateway_profile_not_allowed"
+
+
+def test_realtime_route_failure_opens_provider_circuit() -> None:
+    grants = copy.deepcopy(DEFAULT_WORKLOAD_GRANTS["dali_chat_server"])
+    grants["enabled"] = True
+    settings = Settings(
+        service_tokens_json=SecretStr('{"dali_chat_server":"chat-test-token"}'),
+        workload_grants_json=json.dumps({"dali_chat_server": grants}),
+        caller_limits_json='{"dali_chat_server":1}',
+        legacy_auth_workload_ids_json='["dali_chat_server"]',
+        provider_circuit_enabled=True,
+        provider_circuit_failure_threshold=1,
+    )
+    application = create_app(
+        settings, providers={"openai": FakeProvider(), "gemini": FakeProvider()}
+    )
+    request = RealtimeTranslationStart(
+        type="session.start",
+        request_id=uuid4(),
+        product="dali_chat",
+        profile="dali_chat.interpret.openai",
+        target_language="zh-CN",
+    )
+    with TestClient(application):
+        service = application.state.container.service
+        service.record_realtime_route_failure(
+            caller="dali_chat_server", request=request, profile_name=request.profile
+        )
+        assert (
+            service.circuits.snapshot("openai.gpt-realtime-translate").state == "open"
+        )

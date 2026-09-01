@@ -1,6 +1,7 @@
 # Dali AI Gateway Multi-Product Design
 
-Status: Proposed architecture design  
+Status: Approved architecture direction; restricted AWS-US2 pilot implemented,
+shared-production readiness still gated
 Audience: AI Gateway, product-service, Platform, security, and operations owners  
 Scope: Evolve the restricted Classroom Gateway into a private, product-neutral
 AI data plane that can support Interpreter and other Dali products without
@@ -60,20 +61,24 @@ The implemented v1 baseline includes:
 - authenticated `POST /ai/v1/text/generations`;
 - authenticated `POST /ai/v1/audio/transcriptions`;
 - authenticated realtime transcription and translation WebSockets;
+- versioned realtime translation sessions with sequence acknowledgements,
+  rotation, usage-final, and bounded windowed failover;
 - OpenAI, Gemini, and Ollama adapters;
 - server-configured provider/model profiles;
 - caller-to-product authorization;
 - process-local per-caller/capability admission;
 - bounded batch and realtime audio input;
+- transient translated-audio forwarding with normalized completion events;
 - normalized safe errors;
 - OpenAPI 3.1 and JSON Schema 2020-12 contracts; and
 - privacy, provider-protocol, contract, admission, and API tests.
 
-The baseline is suitable for the restricted Classroom pilot. It is not yet a
-shared-production service because it lacks explicit caller-to-profile grants,
-reliable readiness, multi-instance admission, provider failover/circuit state,
-translated-audio/TTS contracts, finalized realtime usage, and shared operations
-controls.
+The current pilot is suitable for isolated Classroom/Chat testing. It now has
+explicit caller-to-profile grants, readiness checks, v2 realtime sequencing,
+translated audio, content-free usage-final events, bounded failover, and
+single-instance provider circuit controls. It is not yet a shared-production
+service because multi-instance admission/circuit state, authoritative usage
+delivery, complete operational controls, and load/soak evidence remain gated.
 
 ## 4. Goals
 

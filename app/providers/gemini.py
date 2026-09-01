@@ -603,6 +603,7 @@ class GeminiRealtimeSession:
                                 ),
                                 sample_rate_hz=24000,
                                 channels=1,
+                                sample_format="s16le",
                             )
                         )
         translated = _transcription_text(content.get("outputTranscription"))
@@ -641,6 +642,7 @@ class GeminiRealtimeSession:
                     content_type="audio/pcm;rate=24000",
                     sample_rate_hz=24000,
                     channels=1,
+                    sample_format="s16le",
                 )
             )
         if content.get("turnComplete") is True:
@@ -659,8 +661,7 @@ def _live_url(base_url: str, api_key: str) -> str:
     parsed = urlsplit(base_url)
     scheme = "wss" if parsed.scheme == "https" else "ws"
     path = (
-        "/ws/google.ai.generativelanguage.v1beta.GenerativeService."
-        "BidiGenerateContent"
+        "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
     )
     return urlunsplit((scheme, parsed.netloc, path, urlencode({"key": api_key}), ""))
 

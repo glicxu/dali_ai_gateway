@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import time
 from dataclasses import dataclass
 
 from app.core.circuit import CircuitRegistry
@@ -22,17 +24,38 @@ class Container:
     registry: ProviderRegistry
     service: GatewayService
     usage_delivery: UsageDelivery | None = None
+    draining: bool = False
 
     def is_ready(self) -> bool:
-        return self.authenticator.ready and self.registry.is_ready_for_workloads(
-            self.authenticator.workload_ids
+        return (
+            not self.draining
+            and self.authenticator.ready
+            and self.registry.is_ready_for_workloads(self.authenticator.workload_ids)
         )
+
+    async def safe_readiness_details(self) -> dict[str, object]:
+        return {
+            **self.registry.safe_readiness_details(),
+            "draining": self.draining,
+            "active_leases": await self.service.admission.active_count(),
+            "usage_sink_configured": self.usage_delivery is not None,
+        }
+
+    def begin_drain(self) -> None:
+        self.draining = True
 
     async def start(self) -> None:
         await self.authenticator.start()
         await self.registry.start()
 
     async def close(self) -> None:
+        self.begin_drain()
+        deadline = time.monotonic() + self.settings.shutdown_drain_seconds
+        while (
+            await self.service.admission.active_count() > 0
+            and time.monotonic() < deadline
+        ):
+            await asyncio.sleep(0.05)
         try:
             await self.registry.close()
         finally:
@@ -50,6 +73,7 @@ def build_container(
     admission = AdmissionController(
         settings.caller_limits(), lease_ttl_seconds=settings.admission_lease_ttl_seconds
     )
+    usage_delivery = _build_usage_delivery(settings)
     return Container(
         settings=settings,
         authenticator=workload_authenticator,
@@ -63,8 +87,9 @@ def build_container(
                 open_seconds=settings.provider_circuit_open_seconds,
                 disabled_routes=settings.provider_circuit_disabled_routes(),
             ),
+            usage_delivery=usage_delivery,
         ),
-        usage_delivery=_build_usage_delivery(settings),
+        usage_delivery=usage_delivery,
     )
 
 

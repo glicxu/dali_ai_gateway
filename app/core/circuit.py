@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from math import ceil
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import AsyncIterator, Literal
@@ -114,6 +115,15 @@ class CircuitRegistry:
 
     def snapshot(self, route_id: str) -> CircuitSnapshot:
         return self._circuit(route_id).snapshot()
+
+    def retry_after_ms(self, route_id: str) -> int | None:
+        """Return a safe local retry delay without exposing provider details."""
+        if not self._enabled:
+            return None
+        open_until = self.snapshot(route_id).open_until
+        if open_until is None:
+            return None
+        return max(0, ceil((open_until - time.monotonic()) * 1000))
 
     @asynccontextmanager
     async def call(self, route_id: str) -> AsyncIterator[None]:

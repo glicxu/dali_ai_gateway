@@ -28,6 +28,13 @@ translated text remains `translation.*`.
 
 The versioned v2 realtime schemas add monotonic input sequence numbers,
 window identifiers, accepted-input watermarks, normalized translated-audio
-events, and explicit provider-switch/terminal events. v2 automatic failover is
-Gateway-owned and occurs when opening the next approved 60/90/120-second
+events, and explicit provider-switch/terminal events. The supported pilot
+policies are `single`, `windowed_failover`, and the test-only
+`windowed_alternate`; concurrent comparison is out of scope. Automatic routing
+is Gateway-owned and occurs when opening the next approved 60/90/120-second
 window; accepted audio is not replayed.
+
+`examples/realtime-translation-v2-session-start.json` is the canonical
+windowed-failover request for the Dali Chat interpretation pilot. It demonstrates
+an OpenAI primary, Gemini fallback, and explicit source/target transcript plus
+translated-audio outputs.

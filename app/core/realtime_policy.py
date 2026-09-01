@@ -36,7 +36,9 @@ class RealtimeRoutePolicy(BaseModel):
     def validate_mode_profiles(self) -> RealtimeRoutePolicy:
         if self.mode == "single":
             if self.fallback_profile is not None or self.compare_profile is not None:
-                raise ValueError("single mode cannot define fallback or compare profile")
+                raise ValueError(
+                    "single mode cannot define fallback or compare profile"
+                )
         elif self.mode == "compare":
             if self.compare_profile is None:
                 raise ValueError("compare mode requires compare_profile")
@@ -57,3 +59,13 @@ class RealtimeRoutePolicy(BaseModel):
         if len(set(referenced)) != len(referenced):
             raise ValueError("realtime route profiles must be distinct")
         return self
+
+    @property
+    def ordered_profiles(self) -> tuple[str, ...]:
+        """Return the stable route order used by selection and preflight."""
+        if self.mode == "compare":
+            assert self.compare_profile is not None
+            return (self.primary_profile, self.compare_profile)
+        if self.fallback_profile is not None:
+            return (self.primary_profile, self.fallback_profile)
+        return (self.primary_profile,)

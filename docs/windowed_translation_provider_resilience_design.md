@@ -1,6 +1,7 @@
 # Windowed Translation Comparison and Provider Resilience
 
-Status: Approved for implementation; implementation not started  
+Status: Approved; pilot implementation deployed to AWS-US2; full resilience
+contract and operational gates remain in progress
 Audience: Dali AI Gateway, Interpreter, product-service, security, and
 operations owners  
 Related: `multi_product_gateway_design.md`
@@ -13,8 +14,8 @@ remains gated by the multi-product implementation plan's G4–G6 exit criteria.
 
 This document defines a reusable Gateway capability for comparing live speech
 translation providers and for using one provider as a bounded-window fallback
-for another. The initial comparison is between Gemini Live Translate and
-OpenAI Realtime Translate, but the design is provider-neutral.
+for another. The initial providers are Gemini Live Translate and OpenAI
+Realtime Translate; the design is provider-neutral.
 
 The design intentionally does **not** promise seamless mid-utterance
 failover. A translation stream is divided into short, independently reported
@@ -30,10 +31,9 @@ content-free operational measurements.
 
 ## 2. Goals
 
-1. Run controlled A/B comparisons against identical source audio.
-2. Preserve source and target transcript streams and translated audio from each
-   provider without hiding provider-specific output.
-3. Route production traffic as active-primary/standby-secondary without
+1. Preserve source and target transcript streams and translated audio without
+   hiding provider-specific output.
+2. Route production traffic as active-primary/standby-secondary without
    continuously paying for duplicate requests.
 4. Fail over at a bounded window boundary with explicit transition metadata.
 5. Keep provider API keys, raw audio, transcripts, and prompts inside the
@@ -47,28 +47,11 @@ content-free operational measurements.
 - Gateway-owned prompts, terminology, language policy, or durable transcripts.
 - Client-side provider credentials or direct mobile-to-provider connections.
 - Automatic selection of a “better” translation based on subjective quality.
-- Running both providers in production unless the caller explicitly selects
-  comparison mode.
+- Running both providers concurrently for one session.
 
 ## 4. Operating modes
 
-### 4.1 Compare mode (active-active)
-
-The product sends one source stream to Gateway. Gateway fans out the same
-audio bytes to two provider sessions and returns two labeled result lanes:
-
-```text
-source audio
-    |---------------- Gemini session ---- source/target/audio lane A
-    `---------------- OpenAI session ---- source/target/audio lane B
-```
-
-The product may play either or both audio lanes and may display source,
-target, or both transcript lanes. This mode is for demos, evaluation, and
-explicit user-selected quality comparisons. It is not the default production
-mode.
-
-### 4.2 Windowed failover mode (active-passive)
+### 4.1 Windowed failover mode (active-passive)
 
 Only the selected primary provider receives a window. Gateway opens the
 secondary provider for the next window when the primary is unavailable or
@@ -86,7 +69,7 @@ fails the configured health/latency policy.
 The policy must be configured by the product workload or Gateway operator;
 end users cannot supply provider names or credentials.
 
-### 4.3 Single-provider mode
+### 4.2 Single-provider mode
 
 Existing behavior remains available. This is the default when no comparison or
 failover policy is requested.
@@ -147,8 +130,6 @@ Raw provider event names and payloads must not leak through this contract.
 
 ## 7. Routing and failover rules
 
-- A comparison lane gets its own admission accounting. It consumes two
-  provider allocations and must not consume a protected Host reserve.
 - A failover switch requires the secondary to pass readiness and capability
   checks for the requested language pair, audio format, and output modalities.
 - Use a circuit breaker per provider/profile: closed, open after repeated
@@ -186,8 +167,8 @@ Interpreter should request a Gateway policy and render normalized lanes. It
 should not know provider URLs, API keys, WebSocket event names, or circuit
 breaker state. Suggested controls are:
 
-- Provider: Primary, Gemini, OpenAI, or Compare (if entitled).
-- Policy: Single provider, Compare, or Windowed failover.
+- Provider: configured primary/fallback route (provider names remain server-side).
+- Policy: Single provider or Windowed failover.
 - Window length: operator/product-approved values only.
 - Audio: original, Gemini target, OpenAI target, or muted.
 - Text: source, target, both, and provider labels.
@@ -217,7 +198,6 @@ Track content-free metrics by product, profile, and provider:
 - first-output and end-of-window latency;
 - connection duration and bytes/duration processed;
 - provider error category and circuit state;
-- comparison lane completion ratio; and
 - fallback success rate.
 
 Do not use transcript similarity or user content in Gateway telemetry. Product
@@ -232,8 +212,7 @@ rules.
    audio fixtures that contain no personal data.
 4. Test provider timeout, disconnect, malformed event, circuit-open, and
    capability-mismatch cases.
-5. Enable Compare mode for a dedicated test workload only.
-6. Enable Windowed failover for Interpreter with a conservative 90-second
+5. Enable Windowed failover for Interpreter with a conservative 90-second
    window and explicit operator metrics.
 7. Retain the existing single-provider Classroom behavior unchanged.
 
@@ -259,8 +238,6 @@ Configuration still required per workload/region:
 
 - Primary and fallback provider for each approved language pair.
 - Maximum switches and maximum session duration.
-- Whether comparison is limited to internal evaluators or exposed to general
-  users.
 - Capability/quality evidence for each enabled fallback pair.
 
 These decisions should be recorded in the Gateway implementation plan and,

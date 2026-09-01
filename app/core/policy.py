@@ -42,6 +42,42 @@ class ProfilePolicyDocument(_StrictPolicyModel):
     usage: Literal["production", "evaluation"] = "production"
     enabled: bool = True
     required_for_readiness: bool = True
+    privacy_class: Literal["standard", "restricted"] = "standard"
+    usage_authority: Literal["non_authoritative", "authoritative"] = "non_authoritative"
+    supported_outputs: list[str] | None = Field(default=None, max_length=8)
+    supported_target_languages: list[str] | None = Field(default=None, max_length=128)
+    supported_audio_sample_rates_hz: list[int] | None = Field(
+        default=None, max_length=2
+    )
+
+    @field_validator("supported_outputs")
+    @classmethod
+    def outputs_are_unique(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and len(value) != len(set(value)):
+            raise ValueError("supported outputs must be unique")
+        return value
+
+    @field_validator("supported_target_languages")
+    @classmethod
+    def target_languages_are_unique(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None:
+            if not value:
+                raise ValueError("supported target languages cannot be empty")
+            if len(value) != len({item.lower() for item in value}):
+                raise ValueError("supported target languages must be unique")
+        return value
+
+    @field_validator("supported_audio_sample_rates_hz")
+    @classmethod
+    def sample_rates_are_valid(cls, value: list[int] | None) -> list[int] | None:
+        if value is not None:
+            if not value:
+                raise ValueError("supported audio sample rates cannot be empty")
+            if any(rate not in (16000, 24000) for rate in value):
+                raise ValueError("supported audio sample rates are invalid")
+            if len(value) != len(set(value)):
+                raise ValueError("supported audio sample rates must be unique")
+        return value
 
 
 class WorkloadGrantDocument(_StrictPolicyModel):
@@ -139,6 +175,11 @@ class ModelProfile:
     usage: Literal["production", "evaluation"]
     enabled: bool
     required_for_readiness: bool
+    privacy_class: Literal["standard", "restricted"]
+    usage_authority: Literal["non_authoritative", "authoritative"]
+    supported_outputs: frozenset[str] | None
+    supported_target_languages: frozenset[str] | None
+    supported_audio_sample_rates_hz: frozenset[int] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +212,23 @@ class PolicyGeneration:
                 usage=value.usage,
                 enabled=value.enabled,
                 required_for_readiness=value.required_for_readiness,
+                privacy_class=value.privacy_class,
+                usage_authority=value.usage_authority,
+                supported_outputs=(
+                    frozenset(value.supported_outputs)
+                    if value.supported_outputs is not None
+                    else None
+                ),
+                supported_target_languages=(
+                    frozenset(item.lower() for item in value.supported_target_languages)
+                    if value.supported_target_languages is not None
+                    else None
+                ),
+                supported_audio_sample_rates_hz=(
+                    frozenset(value.supported_audio_sample_rates_hz)
+                    if value.supported_audio_sample_rates_hz is not None
+                    else None
+                ),
             )
             for name, value in document.profiles.items()
         }

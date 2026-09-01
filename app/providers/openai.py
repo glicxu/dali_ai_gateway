@@ -621,6 +621,7 @@ def _translation_event(value: dict[str, object]) -> RealtimeEvent | None:
                 content_type="audio/pcm",
                 sample_rate_hz=24000,
                 channels=1,
+                sample_format="s16le",
             )
             if audio
             else None
@@ -635,6 +636,7 @@ def _translation_event(value: dict[str, object]) -> RealtimeEvent | None:
             content_type="audio/pcm",
             sample_rate_hz=24000,
             channels=1,
+            sample_format="s16le",
         )
     delta_types = {
         "session.output_transcript.delta",

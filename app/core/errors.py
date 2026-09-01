@@ -9,6 +9,7 @@ class GatewayError(Exception):
     code: str
     message: str
     retryable: bool = False
+    retry_after_ms: int | None = None
 
 
 AUTHENTICATION_REQUIRED = GatewayError(
@@ -31,6 +32,24 @@ CAPACITY_EXCEEDED = GatewayError(
     "ai_gateway_capacity_exceeded",
     "AI capacity is temporarily unavailable.",
     True,
+)
+SERVICE_DRAINING = GatewayError(
+    503,
+    "ai_gateway_draining",
+    "The AI Gateway is draining active work.",
+    True,
+)
+USAGE_DELIVERY_UNCONFIRMED = GatewayError(
+    503,
+    "ai_gateway_usage_delivery_unconfirmed",
+    "AI work completed but usage delivery was not confirmed.",
+    False,
+)
+PROVIDER_OUTCOME_AMBIGUOUS = GatewayError(
+    502,
+    "ai_gateway_provider_outcome_ambiguous",
+    "The AI provider outcome is unknown and must not be retried automatically.",
+    False,
 )
 PROVIDER_UNAVAILABLE = GatewayError(
     503,

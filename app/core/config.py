@@ -259,6 +259,7 @@ class Settings(BaseSettings):
     usage_delivery_max_attempts: int = Field(default=3, ge=1, le=5)
     usage_delivery_retry_delay_seconds: float = Field(default=0.25, ge=0, le=10)
     admission_lease_ttl_seconds: float = Field(default=300, ge=30, le=1800)
+    shutdown_drain_seconds: float = Field(default=10, ge=0, le=60)
     provider_circuit_enabled: bool = False
     provider_circuit_failure_threshold: int = Field(default=3, ge=1, le=20)
     provider_circuit_open_seconds: float = Field(default=30, ge=1, le=300)

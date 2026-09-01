@@ -7,7 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.api.routes import router_for
-from app.container import Container, build_container
+from app.container import build_container
 from app.core.config import Settings, get_settings
 from app.core.errors import GatewayError
 from app.core.security import WorkloadAuthenticator
@@ -51,6 +51,7 @@ def create_app(
                     "code": error.code,
                     "message": error.message,
                     "retryable": error.retryable,
+                    "retry_after_ms": error.retry_after_ms,
                 }
             },
         )

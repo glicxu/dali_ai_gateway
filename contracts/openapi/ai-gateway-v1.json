@@ -738,9 +738,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
+                  "additionalProperties": true,
                   "title": "Response Ready Health Ready Get",
                   "type": "object"
                 }
@@ -750,6 +748,20 @@
           }
         },
         "summary": "Ready",
+        "tags": [
+          "Health"
+        ]
+      }
+    },
+    "/metrics": {
+      "get": {
+        "operationId": "metrics_metrics_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Metrics",
         "tags": [
           "Health"
         ]
