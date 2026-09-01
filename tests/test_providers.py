@@ -588,7 +588,6 @@ def test_openai_realtime_translation_protocol() -> None:
             "type": "session.update",
             "session": {
                 "audio": {"output": {"language": "de"}},
-                "instructions": "Translate faithfully.",
             },
         }
         assert (await realtime.next_event()).type == "translation.delta"

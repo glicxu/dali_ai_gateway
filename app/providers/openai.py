@@ -472,8 +472,11 @@ class OpenAIRealtimeTranslationSession:
             session: dict[str, object] = {
                 "audio": {"output": {"language": self._target_language}}
             }
-            if self._instructions:
-                session["instructions"] = self._instructions
+            # The dedicated GPT-Realtime-Translate endpoint does not accept
+            # `session.instructions`; translation behavior is defined by the
+            # selected target language and the model.  Keep the product-level
+            # instruction in the provider-neutral interface, but do not send
+            # an unsupported parameter to OpenAI.
             await self._send({"type": "session.update", "session": session})
             self._reader = asyncio.create_task(self._read_events())
         except Exception as error:
