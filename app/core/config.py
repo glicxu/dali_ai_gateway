@@ -162,6 +162,83 @@ DEFAULT_PROFILES: dict[str, dict[str, object]] = {
         "model": "gemini-3.5-flash-lite",
         "required_for_readiness": False,
     },
+    "interprete.live_summary": {
+        "capacity_pool": "interprete",
+        "capability": "text_generation",
+        "provider": "openai",
+        "model": "gpt-5-mini",
+        "required_for_readiness": False,
+        "max_input_bytes": 250000,
+    },
+    "interprete.translation.text": {
+        "capacity_pool": "interprete",
+        "capability": "text_generation",
+        "provider": "openai",
+        "model": "gpt-5-mini",
+        "required_for_readiness": False,
+        "max_input_bytes": 250000,
+    },
+    "interprete.transcription.batch": {
+        "capacity_pool": "interprete",
+        "capability": "audio_transcription",
+        "provider": "openai",
+        "model": "gpt-4o-mini-transcribe",
+        "required_for_readiness": False,
+        "max_audio_bytes": 10485760,
+    },
+    "interprete.transcription.realtime": {
+        "capacity_pool": "interprete_realtime",
+        "capability": "realtime_transcription",
+        "provider": "openai",
+        "model": "gpt-realtime-whisper",
+        "required_for_readiness": False,
+        "max_chunk_bytes": 262144,
+        "max_session_seconds": 600,
+        "max_accepted_input_bytes": 62914560,
+        "max_provider_buffer_bytes": 262144,
+        "max_outbound_events": 1,
+    },
+    "interprete.translation.realtime": {
+        "capacity_pool": "interprete_realtime",
+        "capability": "realtime_translation",
+        "provider": "openai",
+        "model": "gpt-realtime-translate",
+        "required_for_readiness": False,
+        "max_chunk_bytes": 262144,
+        "max_session_seconds": 600,
+        "max_accepted_input_bytes": 62914560,
+        "max_provider_buffer_bytes": 262144,
+        "max_outbound_events": 1,
+    },
+    "interprete.speech.standard": {
+        "capacity_pool": "interprete",
+        "capability": "speech_synthesis",
+        "provider": "openai",
+        "model": "gpt-4o-mini-tts",
+        "required_for_readiness": False,
+        "max_input_bytes": 16384,
+        "voice_routes": {"neutral": "alloy", "warm": "coral"},
+    },
+    "scribe.transcription.live": {
+        "capacity_pool": "scribe_realtime",
+        "capability": "realtime_transcription",
+        "provider": "gemini",
+        "model": "gemini-3.5-transcribe-live",
+        "required_for_readiness": False,
+        "max_chunk_bytes": 262144,
+        "max_session_seconds": 3600,
+        "max_accepted_input_bytes": 67108864,
+        "max_provider_buffer_bytes": 262144,
+        "max_outbound_events": 1,
+    },
+    "scribe.summary.text": {
+        "capacity_pool": "scribe",
+        "capability": "text_generation",
+        "provider": "gemini",
+        "model": "gemini-3.5-flash-lite",
+        "required_for_readiness": False,
+        "max_input_bytes": 250000,
+    },
 }
 
 DEFAULT_WORKLOAD_GRANTS: dict[str, dict[str, object]] = {
@@ -215,6 +292,37 @@ DEFAULT_WORKLOAD_GRANTS: dict[str, dict[str, object]] = {
             "video_analysis",
         ],
     },
+    "interpreter_server_ai": {
+        "enabled": False,
+        "products": ["interprete"],
+        "profiles": [
+            "interprete.live_summary",
+            "interprete.translation.text",
+            "interprete.transcription.batch",
+            "interprete.transcription.realtime",
+            "interprete.translation.realtime",
+            "interprete.speech.standard",
+        ],
+        "capabilities": [
+            "text_generation",
+            "audio_transcription",
+            "realtime_transcription",
+            "realtime_translation",
+            "speech_synthesis",
+        ],
+    },
+    "dali_scribe_server_ai": {
+        "enabled": False,
+        "products": ["scribe"],
+        "profiles": [
+            "scribe.transcription.live",
+            "scribe.summary.text",
+        ],
+        "capabilities": [
+            "realtime_transcription",
+            "text_generation",
+        ],
+    },
 }
 DEFAULT_WORKLOAD_GRANTS_JSON = json.dumps(
     DEFAULT_WORKLOAD_GRANTS, separators=(",", ":")
@@ -236,10 +344,13 @@ class Settings(BaseSettings):
     openai_credential_access_id: str = "openai"
     gemini_credential_access_id: str = "gemini"
     service_tokens_json: SecretStr = SecretStr("{}")
-    caller_limits_json: str = '{"dali_classroom_server":1,"dali_chat_server":2}'
+    caller_limits_json: str = (
+        '{"dali_classroom_server":1,"dali_chat_server":2,"interpreter_server_ai":2,"dali_scribe_server_ai":2}'
+    )
     model_profiles_json: str = "{}"
     policy_generation_id: str = "builtin-classroom-v1"
     workload_grants_json: str = DEFAULT_WORKLOAD_GRANTS_JSON
+    scribe_ai_enabled: bool = False
     legacy_auth_workload_ids_json: str = '["dali_classroom_server"]'
     platform_workload_auth_enabled: bool = False
     platform_workload_auth_required_for_readiness: bool = False
@@ -256,9 +367,17 @@ class Settings(BaseSettings):
     platform_jwks_unknown_key_cooldown_seconds: float = Field(default=5, ge=1, le=60)
     usage_sqs_queue_url: str | None = None
     usage_sqs_region: str | None = None
+    usage_delivery_required: bool = False
     usage_delivery_max_attempts: int = Field(default=3, ge=1, le=5)
     usage_delivery_retry_delay_seconds: float = Field(default=0.25, ge=0, le=10)
     admission_lease_ttl_seconds: float = Field(default=300, ge=30, le=1800)
+    admission_dynamodb_table: str | None = None
+    admission_dynamodb_region: str | None = None
+    shared_admission_required: bool = False
+    circuit_dynamodb_table: str | None = None
+    circuit_dynamodb_region: str | None = None
+    shared_circuit_required: bool = False
+    execution_claim_ttl_seconds: int = Field(default=86400, ge=300, le=604800)
     shutdown_drain_seconds: float = Field(default=10, ge=0, le=60)
     provider_circuit_enabled: bool = False
     provider_circuit_failure_threshold: int = Field(default=3, ge=1, le=20)
@@ -335,6 +454,20 @@ class Settings(BaseSettings):
             or self.usage_sqs_queue_url.endswith(".fifo")
         ):
             raise ValueError("usage sink requires an HTTPS SQS Standard queue URL")
+        if self.usage_delivery_required and not self.usage_sqs_queue_url:
+            raise ValueError("durable usage delivery is required but not configured")
+        if bool(self.admission_dynamodb_table) != bool(self.admission_dynamodb_region):
+            raise ValueError(
+                "DynamoDB admission table and region must be configured together"
+            )
+        if self.shared_admission_required and not self.admission_dynamodb_table:
+            raise ValueError("shared admission is required but not configured")
+        if bool(self.circuit_dynamodb_table) != bool(self.circuit_dynamodb_region):
+            raise ValueError(
+                "DynamoDB circuit table and region must be configured together"
+            )
+        if self.shared_circuit_required and not self.circuit_dynamodb_table:
+            raise ValueError("shared circuit is required but not configured")
         return self
 
     @field_validator(
@@ -402,11 +535,16 @@ class Settings(BaseSettings):
         return merged
 
     def policy_generation(self) -> PolicyGeneration:
+        grants = _json_object(self.workload_grants_json)
+        if self.scribe_ai_enabled and "dali_scribe_server_ai" in grants:
+            scribe_grant = dict(grants["dali_scribe_server_ai"])  # type: ignore[arg-type]
+            scribe_grant["enabled"] = True
+            grants["dali_scribe_server_ai"] = scribe_grant
         document = PolicyGenerationDocument.model_validate(
             {
                 "generation_id": self.policy_generation_id,
                 "profiles": self.model_profiles(),
-                "grants": _json_object(self.workload_grants_json),
+                "grants": grants,
             }
         )
         return PolicyGeneration.from_document(document)
