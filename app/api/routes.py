@@ -337,6 +337,61 @@ def router_for(container: Container) -> APIRouter:
             if session is not None:
                 await session.close()
 
+    @router.websocket("/ai/v2/realtime/transcriptions")
+    async def realtime_transcription_v2(websocket: WebSocket) -> None:
+        try:
+            ensure_accepting()
+            principal = await container.authenticator.authenticate_workload(
+                websocket.headers.get("x-dali-caller"),
+                websocket.headers.get("authorization"),
+            )
+        except GatewayError as error:
+            await websocket.close(
+                code=1013 if error.code == SERVICE_DRAINING.code else 4401,
+                reason=error.code,
+            )
+            return
+        await websocket.accept()
+        session = None
+        session_ref = [None]
+        try:
+            try:
+                start = RealtimeStart.model_validate(await websocket.receive_json())
+            except (ValidationError, ValueError, TypeError):
+                raise REQUEST_INVALID
+            caller = principal.workload_id
+            async with container.service.admission.lease(
+                caller, "realtime_transcription"
+            ):
+
+                async def open_profile(_profile: str):
+                    return await container.service.open_realtime(
+                        caller=caller, request=start
+                    )
+
+                session = await open_profile(start.profile)
+                session_ref[0] = session
+                await _bridge_v2(
+                    websocket,
+                    session,
+                    request_id=start.request_id,
+                    profile=start.profile,
+                    audio_sample_rate_hz=start.audio_sample_rate_hz,
+                    outputs=["source_transcript"],
+                    open_profile=open_profile,
+                    session_ref=session_ref,
+                    is_draining=lambda: container.draining,
+                )
+        except WebSocketDisconnect:
+            pass
+        except GatewayError as error:
+            await _safe_error(websocket, error)
+        finally:
+            if session_ref[0] is not None:
+                await session_ref[0].close()
+            elif session is not None:
+                await session.close()
+
     @router.websocket("/ai/v2/realtime/translations")
     async def realtime_translation_v2(websocket: WebSocket) -> None:
         """Versioned contract foundation; routing policies are added next."""

@@ -704,6 +704,48 @@ def test_realtime_transcription_bridge(
     assert fake_provider.realtime.closed_event.wait(timeout=1)
 
 
+def test_realtime_v2_transcription_acknowledges_input(
+    client: TestClient,
+    headers: dict[str, str],
+    fake_provider: FakeProvider,
+) -> None:
+    request_id = str(uuid4())
+    with client.websocket_connect(
+        "/ai/v2/realtime/transcriptions", headers=headers
+    ) as socket:
+        socket.send_json(
+            {
+                "type": "session.start",
+                "request_id": request_id,
+                "product": "classroom",
+                "profile": "classroom.transcription.live",
+                "source_language": "en",
+            }
+        )
+        ready = socket.receive_json()
+        assert ready["type"] == "session.ready"
+        assert ready["request_id"] == request_id
+        assert ready["outputs"] == ["source_transcript"]
+        socket.send_json({"type": "audio.append", "sequence": 1, "audio": "AQI="})
+        assert socket.receive_json()["type"] == "audio.accepted"
+        assert socket.receive_json() == {
+            "type": "transcript.delta",
+            "session_id": request_id,
+            "window_id": ready["window_id"],
+            "lane_id": "primary",
+            "provider_ref": "classroom.transcription.live",
+            "sequence": 2,
+            "text": "Lecture",
+            "item_id": "item-1",
+        }
+        socket.send_json({"type": "session.stop"})
+        assert socket.receive_json()["type"] == "usage.final"
+        assert socket.receive_json()["type"] == "session.closed"
+
+    assert fake_provider.realtime.appended == ["AQI="]
+    assert fake_provider.realtime.closed_event.wait(timeout=1)
+
+
 def test_realtime_translation_bridge(
     client: TestClient,
     headers: dict[str, str],
