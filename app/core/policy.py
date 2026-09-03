@@ -49,6 +49,18 @@ class ProfilePolicyDocument(_StrictPolicyModel):
     supported_audio_sample_rates_hz: list[int] | None = Field(
         default=None, max_length=2
     )
+    max_input_bytes: int | None = Field(default=None, ge=1, le=2_000_000)
+    max_audio_bytes: int | None = Field(default=None, ge=1_024, le=25 * 1_024 * 1_024)
+    max_chunk_bytes: int | None = Field(default=None, ge=1_024, le=1_400_000)
+    max_session_seconds: int | None = Field(default=None, ge=30, le=3_600)
+    max_accepted_input_bytes: int | None = Field(
+        default=None, ge=1_024, le=2 * 1_024 * 1_024 * 1_024
+    )
+    max_provider_buffer_bytes: int | None = Field(default=None, ge=1_024, le=1_400_000)
+    max_outbound_events: int | None = Field(default=None, ge=1, le=1)
+    voice_routes: dict[str, str] | None = Field(default=None, max_length=64)
+    capacity_pool: str = Field(default="shared", pattern=r"^[a-z][a-z0-9_.-]{1,63}$")
+    traffic_class: str = Field(default="standard", pattern=r"^[a-z][a-z0-9_.-]{1,63}$")
 
     @field_validator("supported_outputs")
     @classmethod
@@ -77,6 +89,17 @@ class ProfilePolicyDocument(_StrictPolicyModel):
                 raise ValueError("supported audio sample rates are invalid")
             if len(value) != len(set(value)):
                 raise ValueError("supported audio sample rates must be unique")
+        return value
+
+    @field_validator("voice_routes")
+    @classmethod
+    def voices_are_valid(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        if value is not None:
+            if not value or any(
+                not _POLICY_NAME_PATTERN.fullmatch(name) or not route or len(route) > 64
+                for name, route in value.items()
+            ):
+                raise ValueError("voice routes are invalid")
         return value
 
 
@@ -180,6 +203,16 @@ class ModelProfile:
     supported_outputs: frozenset[str] | None
     supported_target_languages: frozenset[str] | None
     supported_audio_sample_rates_hz: frozenset[int] | None
+    max_input_bytes: int | None
+    max_audio_bytes: int | None
+    max_chunk_bytes: int | None
+    max_session_seconds: int | None
+    max_accepted_input_bytes: int | None
+    max_provider_buffer_bytes: int | None
+    max_outbound_events: int | None
+    voice_routes: Mapping[str, str] | None
+    capacity_pool: str
+    traffic_class: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,6 +262,20 @@ class PolicyGeneration:
                     if value.supported_audio_sample_rates_hz is not None
                     else None
                 ),
+                max_input_bytes=value.max_input_bytes,
+                max_audio_bytes=value.max_audio_bytes,
+                max_chunk_bytes=value.max_chunk_bytes,
+                max_session_seconds=value.max_session_seconds,
+                max_accepted_input_bytes=value.max_accepted_input_bytes,
+                max_provider_buffer_bytes=value.max_provider_buffer_bytes,
+                max_outbound_events=value.max_outbound_events,
+                voice_routes=(
+                    MappingProxyType(dict(value.voice_routes))
+                    if value.voice_routes is not None
+                    else None
+                ),
+                capacity_pool=value.capacity_pool,
+                traffic_class=value.traffic_class,
             )
             for name, value in document.profiles.items()
         }
