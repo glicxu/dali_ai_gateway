@@ -23,6 +23,8 @@ from app.providers.base import (
     TranscriptionResult,
 )
 
+_LIVE_TRANSLATE_COMMIT_DRAIN_SECONDS = 1.5
+
 
 class GeminiProvider:
     def __init__(
@@ -404,6 +406,8 @@ class GeminiRealtimeSession:
         self._rate_state: tuple | None = None
         self._translation = ""
         self._source_transcript = ""
+        self._translated_audio_emitted = False
+        self._translation_committed = False
         self._item_number = 1
         self._outputs = outputs
 
@@ -425,6 +429,8 @@ class GeminiRealtimeSession:
             raise PROVIDER_UNAVAILABLE from error
 
     async def append(self, audio_base64: str) -> None:
+        if self._mode == "translation":
+            self._translation_committed = False
         try:
             pcm = base64.b64decode(audio_base64, validate=True)
             if len(pcm) % 2:
@@ -453,12 +459,23 @@ class GeminiRealtimeSession:
         )
 
     async def commit(self) -> None:
+        if self._mode == "translation":
+            self._translation_committed = True
         await self._send({"realtimeInput": {"audioStreamEnd": True}})
+        if self._mode == "translation":
+            # Live Translate is continuous and does not promise the
+            # turnComplete marker used by conversational Live models. Treat
+            # the caller's commit as the normalized item boundary after a
+            # short, bounded drain for transcript/audio already in flight.
+            await asyncio.sleep(_LIVE_TRANSLATE_COMMIT_DRAIN_SECONDS)
+            await self._finalize_translation_item()
 
     async def clear(self) -> None:
         self._rate_state = None
         self._translation = ""
         self._source_transcript = ""
+        self._translated_audio_emitted = False
+        self._translation_committed = False
 
     async def next_event(self) -> RealtimeEvent:
         return await self._events.get()
@@ -484,6 +501,8 @@ class GeminiRealtimeSession:
         self._rate_state = None
         self._translation = ""
         self._source_transcript = ""
+        self._translated_audio_emitted = False
+        self._translation_committed = False
 
     async def _enforce_deadline(self) -> None:
         try:
@@ -590,7 +609,15 @@ class GeminiRealtimeSession:
                         continue
                     audio = inline.get("data")
                     mime_type = inline.get("mimeType")
-                    if isinstance(audio, str) and audio:
+                    if (
+                        isinstance(audio, str)
+                        and audio
+                        and (
+                            not self._translation_committed
+                            or _has_pcm_signal(audio)
+                        )
+                    ):
+                        self._translated_audio_emitted = True
                         await self._events.put(
                             RealtimeEvent(
                                 "translation.audio.delta",
@@ -616,25 +643,30 @@ class GeminiRealtimeSession:
                     item_id=self._item_id,
                 )
             )
-        if content.get("turnComplete") is True and self._source_transcript.strip():
+        if content.get("turnComplete") is True:
+            await self._finalize_translation_item()
+
+    async def _finalize_translation_item(self) -> None:
+        source = self._source_transcript.strip()
+        translation = self._translation.strip()
+        audio_emitted = self._translated_audio_emitted
+        if source:
             await self._events.put(
                 RealtimeEvent(
                     "transcript.final",
-                    text=self._source_transcript.strip(),
+                    text=source,
                     item_id=self._item_id,
                 )
             )
-            self._source_transcript = ""
-        if content.get("turnComplete") is True and self._translation.strip():
+        if translation:
             await self._events.put(
                 RealtimeEvent(
                     "translation.final",
-                    text=self._translation.strip(),
+                    text=translation,
                     item_id=self._item_id,
                 )
             )
-            self._translation = ""
-        if content.get("turnComplete") is True and "translated_audio" in self._outputs:
+        if audio_emitted and "translated_audio" in self._outputs:
             await self._events.put(
                 RealtimeEvent(
                     "translation.audio.final",
@@ -645,8 +677,11 @@ class GeminiRealtimeSession:
                     sample_format="s16le",
                 )
             )
-        if content.get("turnComplete") is True:
+        if source or translation or audio_emitted:
             self._item_number += 1
+        self._source_transcript = ""
+        self._translation = ""
+        self._translated_audio_emitted = False
 
     @property
     def _item_id(self) -> str:
@@ -804,3 +839,12 @@ def _merge_text(current: str, addition: str) -> str:
         return current
     separator = "" if current[-1:].isspace() or addition[:1].isspace() else " "
     return current + separator + addition
+
+
+def _has_pcm_signal(audio_base64: str) -> bool:
+    """Drop the digital silence Live Translate emits while it remains open."""
+    try:
+        pcm = base64.b64decode(audio_base64, validate=True)
+    except (binascii.Error, ValueError):
+        return True
+    return any(pcm)
