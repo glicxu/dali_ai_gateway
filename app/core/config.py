@@ -99,7 +99,7 @@ DEFAULT_PROFILES: dict[str, dict[str, object]] = {
     "dali_chat.transcription.stream.openai": {
         "capability": "realtime_transcription",
         "provider": "openai",
-        "model": "gpt-realtime-whisper",
+        "model": "gpt-4o-mini-transcribe",
         "required_for_readiness": False,
     },
     "dali_chat.transcription.stream.gemini": {
@@ -190,7 +190,7 @@ DEFAULT_PROFILES: dict[str, dict[str, object]] = {
         "capacity_pool": "interprete_realtime",
         "capability": "realtime_transcription",
         "provider": "openai",
-        "model": "gpt-realtime-whisper",
+        "model": "gpt-4o-mini-transcribe",
         "required_for_readiness": False,
         "max_chunk_bytes": 262144,
         "max_session_seconds": 600,
@@ -224,6 +224,18 @@ DEFAULT_PROFILES: dict[str, dict[str, object]] = {
         "capability": "realtime_transcription",
         "provider": "gemini",
         "model": "gemini-3.5-transcribe-live",
+        "required_for_readiness": False,
+        "max_chunk_bytes": 262144,
+        "max_session_seconds": 3600,
+        "max_accepted_input_bytes": 67108864,
+        "max_provider_buffer_bytes": 262144,
+        "max_outbound_events": 1,
+    },
+    "scribe.transcription.live.openai": {
+        "capacity_pool": "scribe_realtime",
+        "capability": "realtime_transcription",
+        "provider": "openai",
+        "model": "gpt-4o-mini-transcribe",
         "required_for_readiness": False,
         "max_chunk_bytes": 262144,
         "max_session_seconds": 3600,
@@ -316,6 +328,7 @@ DEFAULT_WORKLOAD_GRANTS: dict[str, dict[str, object]] = {
         "products": ["scribe"],
         "profiles": [
             "scribe.transcription.live",
+            "scribe.transcription.live.openai",
             "scribe.summary.text",
         ],
         "capabilities": [
@@ -401,6 +414,7 @@ class Settings(BaseSettings):
         gt=0,
         le=10 * 60,
     )
+    realtime_hedge_buffer_seconds: int = Field(default=60, ge=5, le=60)
     max_audio_bytes: int = Field(default=10 * 1024 * 1024, ge=1024, le=25 * 1024 * 1024)
     max_media_bytes: int = Field(default=20 * 1024 * 1024, ge=1024, le=50 * 1024 * 1024)
 

@@ -68,3 +68,9 @@ REQUEST_INVALID = GatewayError(
     "ai_gateway_request_invalid",
     "The AI request is invalid.",
 )
+REQUEST_ALREADY_ACCEPTED = GatewayError(
+    409,
+    "ai_gateway_request_already_accepted",
+    "This request identifier has already been accepted for provider execution.",
+    False,
+)

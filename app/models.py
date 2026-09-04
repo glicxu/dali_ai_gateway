@@ -67,6 +67,10 @@ class RealtimeStart(StrictModel):
     request_id: UUID
     product: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,63}$")
     profile: str = Field(pattern=r"^[a-z][a-z0-9_.-]{2,127}$")
+    fallback_profile: str | None = Field(
+        default=None, pattern=r"^[a-z][a-z0-9_.-]{2,127}$"
+    )
+    hedge_delay_seconds: float = Field(default=2.0, ge=0.25, le=10.0)
     source_language: str = Field(default="auto", min_length=2, max_length=35)
     terminology_prompt: str = Field(default="", max_length=2_000)
     terminology_keywords: list[str] = Field(default_factory=list, max_length=100)
@@ -118,9 +122,9 @@ class RealtimeV2TranslationStart(StrictModel):
     compare_profile: str | None = Field(
         default=None, pattern=r"^[a-z][a-z0-9_.-]{2,127}$"
     )
-    policy: Literal[
-        "single", "compare", "windowed_failover", "windowed_alternate"
-    ] = "single"
+    policy: Literal["single", "compare", "windowed_failover", "windowed_alternate"] = (
+        "single"
+    )
     window_seconds: Literal[60, 90, 120] = 90
     instructions: str = Field(default="", max_length=20_000)
     audio_sample_rate_hz: Literal[16000, 24000] = 24000

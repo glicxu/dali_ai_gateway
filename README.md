@@ -18,9 +18,9 @@ its own admission bucket. Enabling it requires an explicit complete policy
 generation and service credential. Its Flutter client never receives Gateway
 credentials and never calls this service directly.
 
-The reviewed aws-us2 two-product generation is
+The reviewed aws-us2 generation is
 `deploy/aws-us2/two-product.env.example`; it enables only Classroom and Dali
-Chat and requires the external Platform/AWS values listed in
+Chat, carries an independent disabled Interprete workload, and requires the external Platform/AWS values listed in
 `docs/aws_us2_classroom_chat_activation.md` before activation.
 
 Product services retain prompts, terminology, state, durable content, and UX
@@ -80,14 +80,14 @@ disabled by default. Activation requires explicit issuer, single audience,
 required scope, workload allowlist, JWKS URL, TTL/skew policy, and rollout
 configuration. Legacy acceptance is independently allowlisted per workload.
 The internal usage envelope and idempotent delivery interface are not billing
-authority and have no production sink until the Platform MS2/MS3 contracts and
-durable delivery owner are approved.
+authority. AWS SQS Standard is the approved content-free durable sink shape;
+the product relay remains responsible for deduplication and account association.
 
-Batch provider-route circuits are available for isolated deployment testing
-but disabled by default. When enabled, exact disabled/open routes fail before
-provider work, failures are bounded per route, and successful calls close a
-degraded circuit. This process-local implementation is not a substitute for
-the shared circuit state required by multi-instance production readiness.
+Admission leases and provider-route circuits use process-local stores by default
+for development. Production can require DynamoDB-backed shared stores; startup
+then fails closed unless the table and region are configured. The shared table
+uses a string `state_key` partition key and TTL on `expires_at`. Circuit records
+are content-free and admission uses atomic bounded slots across replicas.
 
 ## Local setup
 

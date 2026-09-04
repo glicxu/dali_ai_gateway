@@ -303,6 +303,7 @@ class OpenAIRealtimeSession:
         self._events: asyncio.Queue[RealtimeEvent] = asyncio.Queue()
         self._reader: asyncio.Task[None] | None = None
         self._delta_buffers: dict[str, str] = {}
+        self._rate_state: tuple | None = None
 
     async def start(self) -> None:
         try:
@@ -314,13 +315,15 @@ class OpenAIRealtimeSession:
                 },
                 max_size=2**22,
             )
+            prompt_parts = [self._terminology_prompt.strip()]
+            if self._terminology_keywords:
+                prompt_parts.append(", ".join(self._terminology_keywords))
             transcription: dict[str, object] = {"model": self._model}
             if self._source_language != "auto":
-                transcription["languages"] = [self._source_language]
-            if self._terminology_prompt:
-                transcription["prompt"] = self._terminology_prompt
-            if self._terminology_keywords:
-                transcription["keywords"] = list(self._terminology_keywords)
+                transcription["language"] = self._source_language
+            prompt = "\n".join(part for part in prompt_parts if part)
+            if prompt:
+                transcription["prompt"] = prompt
             await self._send(
                 {
                     "type": "session.update",
@@ -328,12 +331,10 @@ class OpenAIRealtimeSession:
                         "type": "transcription",
                         "audio": {
                             "input": {
-                                "format": {
-                                    "type": "audio/pcm",
-                                    "rate": self._audio_sample_rate_hz,
-                                },
+                                "format": {"type": "audio/pcm", "rate": 24000},
                                 "transcription": transcription,
                                 "turn_detection": None,
+                                "noise_reduction": {"type": "near_field"},
                             }
                         },
                     },
@@ -345,12 +346,29 @@ class OpenAIRealtimeSession:
             raise PROVIDER_UNAVAILABLE from error
 
     async def append(self, audio_base64: str) -> None:
-        await self._send({"type": "input_audio_buffer.append", "audio": audio_base64})
+        try:
+            pcm = base64.b64decode(audio_base64, validate=True)
+            if len(pcm) % 2:
+                raise ValueError("PCM16 audio must contain complete samples")
+            if self._audio_sample_rate_hz != 24000:
+                pcm, self._rate_state = audioop.ratecv(
+                    pcm,
+                    2,
+                    1,
+                    self._audio_sample_rate_hz,
+                    24000,
+                    self._rate_state,
+                )
+            encoded = base64.b64encode(pcm).decode("ascii")
+        except (binascii.Error, ValueError) as error:
+            raise PROVIDER_UNAVAILABLE from error
+        await self._send({"type": "input_audio_buffer.append", "audio": encoded})
 
     async def commit(self) -> None:
         await self._send({"type": "input_audio_buffer.commit"})
 
     async def clear(self) -> None:
+        self._rate_state = None
         await self._send({"type": "input_audio_buffer.clear"})
 
     async def next_event(self) -> RealtimeEvent:
@@ -575,6 +593,7 @@ class OpenAIRealtimeTranslationSession:
 
 
 def _realtime_url(base_url: str, model: str) -> str:
+    del model
     parsed = urlsplit(base_url)
     scheme = "wss" if parsed.scheme == "https" else "ws"
     path = parsed.path.rstrip("/")
@@ -582,7 +601,6 @@ def _realtime_url(base_url: str, model: str) -> str:
         path = f"{path}/realtime"
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
     query["intent"] = "transcription"
-    query["model"] = model
     return urlunsplit((scheme, parsed.netloc, path, urlencode(query), ""))
 
 

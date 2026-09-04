@@ -197,12 +197,64 @@ def test_dali_chat_has_an_independent_optional_demo_grant() -> None:
     assert settings.caller_limits()["dali_chat_server"] == 2
 
 
+def test_interprete_has_an_independent_disabled_workload_and_profiles() -> None:
+    settings = Settings()
+    generation = settings.policy_generation()
+    grant = generation.grants["interpreter_server_ai"]
+
+    assert not grant.enabled
+    assert grant.products == frozenset({"interprete"})
+    assert grant.capabilities == frozenset(
+        {
+            "text_generation",
+            "audio_transcription",
+            "realtime_transcription",
+            "realtime_translation",
+            "speech_synthesis",
+        }
+    )
+    assert set(DEFAULT_WORKLOAD_GRANTS["interpreter_server_ai"]["profiles"]) == set(
+        grant.profiles
+    )
+    assert all(
+        name.startswith("interprete.")
+        and not generation.profiles[name].required_for_readiness
+        for name in grant.profiles
+    )
+    assert settings.caller_limits()["interpreter_server_ai"] == 2
+
+
 def test_admission_lease_ttl_is_explicitly_bounded() -> None:
     assert Settings(admission_lease_ttl_seconds=30).admission_lease_ttl_seconds == 30
     with pytest.raises(ValidationError):
         Settings(admission_lease_ttl_seconds=29)
     with pytest.raises(ValidationError):
         Settings(admission_lease_ttl_seconds=1801)
+
+
+def test_shared_admission_configuration_is_all_or_none() -> None:
+    with pytest.raises(ValidationError, match="table and region"):
+        Settings(admission_dynamodb_table="gateway-state")
+    with pytest.raises(ValidationError, match="required but not configured"):
+        Settings(shared_admission_required=True)
+    settings = Settings(
+        admission_dynamodb_table="gateway-state",
+        admission_dynamodb_region="us-west-2",
+        shared_admission_required=True,
+    )
+    assert settings.admission_dynamodb_table == "gateway-state"
+
+
+def test_shared_circuit_configuration_is_all_or_none() -> None:
+    with pytest.raises(ValidationError, match="circuit table and region"):
+        Settings(circuit_dynamodb_table="gateway-state")
+    with pytest.raises(ValidationError, match="required but not configured"):
+        Settings(shared_circuit_required=True)
+
+
+def test_required_usage_delivery_fails_closed_without_durable_sink() -> None:
+    with pytest.raises(ValidationError, match="durable usage delivery"):
+        Settings(usage_delivery_required=True)
 
 
 def test_reviewed_aws_us2_generation_enables_only_two_product_workloads() -> None:
@@ -218,7 +270,7 @@ def test_reviewed_aws_us2_generation_enables_only_two_product_workloads() -> Non
     )
 
     generation = settings.policy_generation()
-    assert generation.generation_id == "aws-us2-classroom-chat-v4"
+    assert generation.generation_id == "aws-us2-classroom-chat-interprete-v6"
     assert {
         "dali_chat.text.openai.gpt-5-6-sol",
         "dali_chat.text.openai.gpt-5-6-terra",
@@ -228,10 +280,20 @@ def test_reviewed_aws_us2_generation_enables_only_two_product_workloads() -> Non
         "dali_classroom_server",
         "dali_chat_server",
     }
+    assert values["AI_GATEWAY_PLATFORM_WORKLOAD_REQUIRED_SCOPE"] == "ai:execute"
+    assert "interpreter_server_ai" in values[
+        "AI_GATEWAY_PLATFORM_WORKLOAD_IDS_JSON"
+    ]
+    limits = json.loads(values["AI_GATEWAY_CALLER_LIMITS_JSON"])
+    assert limits["interprete_realtime"] == 1
     assert generation.grants["dali_classroom_server"].products == frozenset(
         {"classroom"}
     )
     assert generation.grants["dali_chat_server"].products == frozenset({"dali_chat"})
+    assert not generation.grants["interpreter_server_ai"].enabled
+    assert generation.grants["interpreter_server_ai"].products == frozenset(
+        {"interprete"}
+    )
 
 
 def test_configuration_rejects_duplicate_keys() -> None:

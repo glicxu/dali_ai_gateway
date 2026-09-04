@@ -1,0 +1,56 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Generic shared-state and content-free usage transport for Dali AI Gateway
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: aws-us2
+    AllowedPattern: "[a-z0-9-]+"
+
+Resources:
+  GatewayStateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "dali-ai-gateway-${EnvironmentName}-state"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: state_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: state_key
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  UsageDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "dali-ai-gateway-${EnvironmentName}-usage-dlq"
+      KmsMasterKeyId: alias/aws/sqs
+      MessageRetentionPeriod: 1209600
+
+  UsageQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "dali-ai-gateway-${EnvironmentName}-usage"
+      KmsMasterKeyId: alias/aws/sqs
+      VisibilityTimeout: 90
+      MessageRetentionPeriod: 1209600
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt UsageDeadLetterQueue.Arn
+        maxReceiveCount: 8
+
+Outputs:
+  StateTableName:
+    Value: !Ref GatewayStateTable
+  UsageQueueUrl:
+    Value: !Ref UsageQueue
+  UsageQueueArn:
+    Value: !GetAtt UsageQueue.Arn
+  UsageDeadLetterQueueUrl:
+    Value: !Ref UsageDeadLetterQueue

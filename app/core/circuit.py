@@ -4,7 +4,7 @@ import time
 from math import ceil
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import AsyncIterator, Literal
+from typing import AsyncIterator, Literal, Protocol
 
 from app.core.errors import PROVIDER_UNAVAILABLE
 
@@ -17,6 +17,14 @@ class CircuitSnapshot:
     state: CircuitState
     consecutive_failures: int
     open_until: float | None
+
+
+class SharedCircuitStore(Protocol):
+    async def allow(self, route_id: str) -> bool: ...
+
+    async def record_success(self, route_id: str) -> None: ...
+
+    async def record_failure(self, route_id: str) -> None: ...
 
 
 class RouteCircuit:
@@ -90,6 +98,7 @@ class CircuitRegistry:
         failure_threshold: int = 3,
         open_seconds: float = 30,
         disabled_routes: frozenset[str] = frozenset(),
+        shared_store: SharedCircuitStore | None = None,
     ) -> None:
         if failure_threshold < 1 or open_seconds <= 0:
             raise ValueError("circuit thresholds must be positive")
@@ -97,6 +106,7 @@ class CircuitRegistry:
         self._failure_threshold = failure_threshold
         self._open_seconds = open_seconds
         self._circuits: dict[str, RouteCircuit] = {}
+        self._shared_store = shared_store
         for route_id in disabled_routes:
             self._circuit(route_id).disable()
 
@@ -127,15 +137,32 @@ class CircuitRegistry:
 
     @asynccontextmanager
     async def call(self, route_id: str) -> AsyncIterator[None]:
-        if not self.allow(route_id):
+        if not self.allow(route_id) or (
+            self._shared_store is not None
+            and not await self._shared_store.allow(route_id)
+        ):
             raise PROVIDER_UNAVAILABLE
         try:
             yield
         except Exception:
             self.record_failure(route_id)
+            if self._shared_store is not None:
+                await self._shared_store.record_failure(route_id)
             raise
         else:
             self.record_success(route_id)
+            if self._shared_store is not None:
+                await self._shared_store.record_success(route_id)
+
+    async def record_shared_failure(self, route_id: str) -> None:
+        self.record_failure(route_id)
+        if self._shared_store is not None:
+            await self._shared_store.record_failure(route_id)
+
+    async def check_shared_ready(self) -> bool:
+        if self._shared_store is None:
+            return True
+        return await self._shared_store.allow("gateway.readiness.probe")
 
     def _circuit(self, route_id: str) -> RouteCircuit:
         if route_id not in self._circuits:

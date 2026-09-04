@@ -81,14 +81,17 @@ def test_openai_text_batch_and_realtime_protocols() -> None:
             audio_sample_rate_hz=24000,
         )
         assert "intent=transcription" in str(connection["url"])
-        assert "model=gpt-live-transcribe" in str(connection["url"])
+        assert "model=" not in str(connection["url"])
         update = socket.sent[0]
-        transcription = update["session"]["audio"]["input"]["transcription"]
+        assert update["type"] == "session.update"
+        audio_input = update["session"]["audio"]["input"]
+        assert audio_input["format"] == {"type": "audio/pcm", "rate": 24000}
+        assert audio_input["turn_detection"] is None
+        transcription = audio_input["transcription"]
         assert transcription == {
             "model": "gpt-live-transcribe",
-            "languages": ["en"],
-            "prompt": "Biology",
-            "keywords": ["ATP"],
+            "language": "en",
+            "prompt": "Biology\nATP",
         }
         assert (await realtime.next_event()).type == "transcript.delta"
         assert (await realtime.next_event()).text == "Final transcript."

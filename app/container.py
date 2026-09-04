@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from app.core.circuit import CircuitRegistry
 from app.core.config import Settings
 from app.core.security import ServiceAuthenticator, WorkloadAuthenticator
+from app.core.shared_admission import DynamoDbAdmissionStore
+from app.core.shared_circuit import DynamoDbCircuitStore
+from app.core.execution_claims import DynamoDbExecutionClaimStore
 from app.core.workload_tokens import (
     CutoverWorkloadAuthenticator,
     JwksCache,
@@ -30,6 +33,10 @@ class Container:
         return (
             not self.draining
             and self.authenticator.ready
+            and (
+                not self.settings.usage_delivery_required
+                or self.usage_delivery is not None
+            )
             and self.registry.is_ready_for_workloads(self.authenticator.workload_ids)
         )
 
@@ -45,6 +52,11 @@ class Container:
         self.draining = True
 
     async def start(self) -> None:
+        if self.settings.shared_admission_required:
+            await self.service.admission.active_count()
+        if self.settings.shared_circuit_required:
+            if not await self.service.circuits.check_shared_ready():
+                raise RuntimeError("shared circuit state is not ready")
         await self.authenticator.start()
         await self.registry.start()
 
@@ -71,7 +83,16 @@ def build_container(
     workload_authenticator = authenticator or _build_authenticator(settings)
     registry = ProviderRegistry(settings, providers=providers)
     admission = AdmissionController(
-        settings.caller_limits(), lease_ttl_seconds=settings.admission_lease_ttl_seconds
+        settings.caller_limits(),
+        store=(
+            DynamoDbAdmissionStore(
+                table_name=str(settings.admission_dynamodb_table),
+                region_name=str(settings.admission_dynamodb_region),
+            )
+            if settings.admission_dynamodb_table
+            else None
+        ),
+        lease_ttl_seconds=settings.admission_lease_ttl_seconds,
     )
     usage_delivery = _build_usage_delivery(settings)
     return Container(
@@ -86,8 +107,27 @@ def build_container(
                 failure_threshold=settings.provider_circuit_failure_threshold,
                 open_seconds=settings.provider_circuit_open_seconds,
                 disabled_routes=settings.provider_circuit_disabled_routes(),
+                shared_store=(
+                    DynamoDbCircuitStore(
+                        table_name=str(settings.circuit_dynamodb_table),
+                        region_name=str(settings.circuit_dynamodb_region),
+                        failure_threshold=settings.provider_circuit_failure_threshold,
+                        open_seconds=settings.provider_circuit_open_seconds,
+                    )
+                    if settings.circuit_dynamodb_table
+                    else None
+                ),
             ),
             usage_delivery=usage_delivery,
+            execution_claims=(
+                DynamoDbExecutionClaimStore(
+                    table_name=str(settings.admission_dynamodb_table),
+                    region_name=str(settings.admission_dynamodb_region),
+                )
+                if settings.admission_dynamodb_table
+                else None
+            ),
+            execution_claim_ttl_seconds=settings.execution_claim_ttl_seconds,
         ),
         usage_delivery=usage_delivery,
     )

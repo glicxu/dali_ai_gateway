@@ -8,6 +8,20 @@ from app.core.circuit import CircuitRegistry, RouteCircuit
 from app.core.errors import GatewayError
 
 
+class _SharedCircuit:
+    def __init__(self) -> None:
+        self.open_routes: set[str] = set()
+
+    async def allow(self, route_id: str) -> bool:
+        return route_id not in self.open_routes
+
+    async def record_success(self, route_id: str) -> None:
+        self.open_routes.discard(route_id)
+
+    async def record_failure(self, route_id: str) -> None:
+        self.open_routes.add(route_id)
+
+
 def test_circuit_opens_after_threshold_and_recovers_at_deadline() -> None:
     circuit = RouteCircuit(failure_threshold=2, open_seconds=10)
     assert circuit.allow(now=100)
@@ -69,3 +83,19 @@ def test_registry_reports_safe_retry_delay_only_for_open_circuit() -> None:
     retry_after = registry.retry_after_ms("openai.primary")
     assert retry_after is not None
     assert 0 < retry_after <= 10_000
+
+
+def test_registry_uses_shared_state_across_replicas() -> None:
+    async def exercise() -> None:
+        shared = _SharedCircuit()
+        first = CircuitRegistry(enabled=True, shared_store=shared)
+        second = CircuitRegistry(enabled=True, shared_store=shared)
+        with pytest.raises(RuntimeError):
+            async with first.call("openai.primary"):
+                raise RuntimeError("provider failed")
+        with pytest.raises(GatewayError) as captured:
+            async with second.call("openai.primary"):
+                pass
+        assert captured.value.code == "ai_gateway_provider_unavailable"
+
+    asyncio.run(exercise())

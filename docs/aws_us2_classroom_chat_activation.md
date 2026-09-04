@@ -1,6 +1,6 @@
 # aws-us2 Classroom and Dali Chat Gateway Activation
 
-Status: implementation-ready; external Platform and AWS values pending  
+Status: v6 disabled Interprete workload deployed; shared Phase 6 infrastructure pending
 Policy generation: `aws-us2-classroom-chat-v3`
 
 ## Supported product services
@@ -25,7 +25,7 @@ the product server.
 Platform workload JWTs must use:
 
 - audience `dali-ai-gateway`;
-- scope `ai_gateway:invoke`;
+- scope `ai:execute`;
 - `principal_type=workload` and `token_use=access`;
 - `sub` equal to `workload_id`;
 - maximum lifetime five minutes; and
@@ -145,3 +145,9 @@ and rollback test pass.
   combinations with a fixed 2026-08-31 price snapshot. OpenAI and Gemini choices
   are enabled for chat, batch/stream transcription, interpretation, translation,
   TTS, and image analysis; Gemini also remains enabled for video analysis.
+- Gateway release `20260902T145256Z` activates policy generation
+  `aws-us2-classroom-chat-interprete-v6`. It preserves the active Classroom and
+  Dali Chat grants while adding `interpreter_server_ai` as an explicitly
+  disabled workload. The ARM-host 145-test gate and OpenAPI check passed, and
+  both providers remained healthy after restart. Shared DynamoDB/SQS activation
+  remains pending and its required-store flags remain disabled.

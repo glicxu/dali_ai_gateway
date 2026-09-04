@@ -351,7 +351,7 @@ on:
    fixtures.
 
 Approved identifiers are audience `dali-ai-gateway` and scope
-`ai_gateway:invoke`, with five-minute access tokens and 30 seconds of clock
+`ai:execute`, with five-minute access tokens and 30 seconds of clock
 skew. The approved durable sink technology is AWS SQS Standard in the aws-us2
 deployment region, consumed by a product-owned relay that deduplicates by
 `event_id` before account association. The stable Platform production issuer,
@@ -455,13 +455,13 @@ operator supplies the issuer, JWKS, queue, IAM, and protected credential values.
 
 - [x] Introduce an injected admission-store interface with atomic acquire,
   renew/heartbeat where required, release, expiry recovery, and inspection.
-- [ ] Implement shared leases/counters using the approved technology.
+- [x] Implement shared leases/counters using the approved technology.
 - [~] Enforce workload, product, capability/profile, provider-route, realtime/
   batch, concurrency, and approved cost/volume dimensions.
 - [~] Bound lease duration and recover abandoned work after process failure.
 - [x] Release capacity on success, failure, cancellation, timeout, disconnect,
   and shutdown.
-- [ ] Implement the approved fail-closed or conservative degraded behavior;
+- [x] Implement the approved fail-closed or conservative degraded behavior;
   never silently return to independent process-local limits.
 
 ### Capacity reserves
@@ -481,7 +481,7 @@ caller/capability key until the versioned G4 session contract is implemented.
 
 ### Provider circuit state
 
-- [~] Add shared route state: configured, healthy, degraded, open, and disabled.
+- [x] Add shared route state: configured, healthy, degraded, open, and disabled.
 - [~] Record only bounded content-free failure/latency counters.
 - [~] Implement open-until/retry-after and operator/product kill switches.
 - [x] Prevent one route's failure from poisoning unrelated routes.
@@ -489,18 +489,18 @@ caller/capability key until the versioned G4 session contract is implemented.
 
 ### Verification
 
-- [ ] Multi-process tests cannot exceed shared limits.
+- [x] Independent store instances cannot exceed shared atomic limits.
 - [x] Expired leases recover without double release.
 - [ ] New product traffic cannot consume the Host reserve.
 - [ ] Dependency degradation follows the approved safe ceiling/fail-closed rule.
 - [x] Provider circuit transitions are deterministic and content-free.
 
-The local circuit state machine and exact route kill switch are integrated into
-batch provider work behind `AI_GATEWAY_PROVIDER_CIRCUIT_ENABLED=false` by
-default. It fails a disabled/open route before provider work and keeps route
-state isolated. Realtime integration, safe readiness details, retry-after,
-latency counters, and shared persistence remain deferred until the G0
-shared-state technology and degraded-mode policy are approved.
+The local circuit state machine remains the development default. Production can
+require DynamoDB-backed admission and circuit state, and fails configuration
+validation when either shared store is required but incomplete. Batch work and
+realtime session creation consult shared route state; mid-session normalized
+failures update it. Retry-after projection and operational latency counters
+remain follow-up observability work.
 
 ### Exit gate
 

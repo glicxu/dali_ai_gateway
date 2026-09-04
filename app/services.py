@@ -12,12 +12,14 @@ from uuid import UUID, uuid4
 from datetime import datetime, timezone
 
 from app.core.circuit import CircuitRegistry
+from app.core.execution_claims import ExecutionClaimStore, InMemoryExecutionClaimStore
 from app.core.errors import (
     CAPACITY_EXCEEDED,
     GatewayError,
     PROFILE_NOT_ALLOWED,
     PROVIDER_OUTCOME_AMBIGUOUS,
     REQUEST_INVALID,
+    REQUEST_ALREADY_ACCEPTED,
     USAGE_DELIVERY_UNCONFIRMED,
 )
 from app.core.measurement import MeasurementAccumulator, MeasurementDisposition
@@ -137,22 +139,77 @@ class AdmissionController:
         product: str | None = None,
         profile: str | None = None,
         route: str | None = None,
+        capacity_pool: str | None = None,
+        traffic_class: str | None = None,
     ) -> AsyncIterator[None]:
         key = tuple(
             value
-            for value in (caller, product, profile, route, capability)
+            for value in (
+                caller,
+                product,
+                capacity_pool,
+                traffic_class,
+                profile,
+                route,
+                capability,
+            )
             if value is not None
         )
-        candidates = [
-            ":".join(key),
-            ":".join(value for value in (caller, product, capability) if value),
-            f"{caller}:{capability}",
-            caller,
-        ]
-        limit = next(
-            (self._limits[name] for name in candidates if name in self._limits), 1
+        pool_class_capability = tuple(
+            value for value in (capacity_pool, traffic_class, capability) if value
         )
-        lease_id = await self._store.acquire(key, limit, self._lease_ttl_seconds)
+        candidates = [
+            (":".join(key), key),
+            (
+                ":".join(
+                    value
+                    for value in (
+                        caller,
+                        product,
+                        capacity_pool,
+                        traffic_class,
+                        capability,
+                    )
+                    if value
+                ),
+                tuple(
+                    value
+                    for value in (
+                        caller,
+                        product,
+                        capacity_pool,
+                        traffic_class,
+                        capability,
+                    )
+                    if value
+                ),
+            ),
+            (
+                ":".join(pool_class_capability),
+                ("capacity_pool",) + pool_class_capability,
+            ),
+            (
+                str(capacity_pool or ""),
+                ("capacity_pool", str(capacity_pool or "")),
+            ),
+            (
+                ":".join(value for value in (caller, product, capability) if value),
+                tuple(value for value in (caller, product, capability) if value),
+            ),
+            (f"{caller}:{capability}", (caller, capability)),
+            (caller, key),
+        ]
+        selected = next(
+            (
+                (storage_key, self._limits[name])
+                for name, storage_key in candidates
+                if name and name in self._limits
+            ),
+            (key, 1),
+        )
+        lease_id = await self._store.acquire(
+            selected[0], selected[1], self._lease_ttl_seconds
+        )
         if lease_id is None:
             raise CAPACITY_EXCEEDED
         heartbeat = asyncio.create_task(
@@ -184,11 +241,15 @@ class GatewayService:
         admission: AdmissionController,
         circuits: CircuitRegistry | None = None,
         usage_delivery: UsageDelivery | None = None,
+        execution_claims: ExecutionClaimStore | None = None,
+        execution_claim_ttl_seconds: int = 86400,
     ) -> None:
         self.registry = registry
         self.admission = admission
         self.circuits = circuits or CircuitRegistry(enabled=False)
         self.usage_delivery = usage_delivery
+        self.execution_claims = execution_claims or InMemoryExecutionClaimStore()
+        self.execution_claim_ttl_seconds = execution_claim_ttl_seconds
         self._metric_counts: Counter[str] = Counter()
         self._metric_lock = Lock()
 
@@ -199,6 +260,13 @@ class GatewayService:
     def safe_metric_counts(self) -> dict[str, int]:
         with self._metric_lock:
             return dict(self._metric_counts)
+
+    async def claim_execution(self, request_id: UUID, capability: str) -> None:
+        if not await self.execution_claims.claim(
+            str(request_id), capability, self.execution_claim_ttl_seconds
+        ):
+            self._record_metric("duplicate_execution_rejected")
+            raise REQUEST_ALREADY_ACCEPTED
 
     async def _deliver_batch_usage(
         self,
@@ -276,6 +344,12 @@ class GatewayService:
             profile_name=request.profile,
             capability="text_generation",
         )
+        if (
+            profile.max_input_bytes is not None
+            and len((request.system_instruction + request.input).encode("utf-8"))
+            > profile.max_input_bytes
+        ):
+            raise REQUEST_INVALID
         provider = self.registry.text_provider(raw_provider)
         route_id = f"{profile.provider}.{profile.model}"
         try:
@@ -285,8 +359,11 @@ class GatewayService:
                 product=request.product,
                 profile=request.profile,
                 route=route_id,
+                capacity_pool=profile.capacity_pool,
+                traffic_class=profile.traffic_class,
             ):
                 async with self.circuits.call(route_id):
+                    await self.claim_execution(request.request_id, "text_generation")
                     result = await provider.generate(
                         model=profile.model,
                         system_instruction=request.system_instruction,
@@ -351,6 +428,8 @@ class GatewayService:
             profile_name=profile_name,
             capability="audio_transcription",
         )
+        if profile.max_audio_bytes is not None and len(audio) > profile.max_audio_bytes:
+            raise REQUEST_INVALID
         provider = self.registry.transcription_provider(raw_provider)
         route_id = f"{profile.provider}.{profile.model}"
         try:
@@ -360,8 +439,11 @@ class GatewayService:
                 product=product,
                 profile=profile_name,
                 route=route_id,
+                capacity_pool=profile.capacity_pool,
+                traffic_class=profile.traffic_class,
             ):
                 async with self.circuits.call(route_id):
+                    await self.claim_execution(request_id, "audio_transcription")
                     result = await provider.transcribe(
                         model=profile.model,
                         audio=audio,
@@ -421,6 +503,17 @@ class GatewayService:
             capability="speech_synthesis",
         )
         provider = self.registry.speech_provider(raw_provider)
+        if (
+            profile.max_input_bytes is not None
+            and len((request.input + request.instructions).encode("utf-8"))
+            > profile.max_input_bytes
+        ):
+            raise REQUEST_INVALID
+        voice = request.voice
+        if profile.voice_routes is not None:
+            voice = profile.voice_routes.get(request.voice, "")
+            if not voice:
+                raise PROFILE_NOT_ALLOWED
         route_id = f"{profile.provider}.{profile.model}"
         try:
             async with self.admission.lease(
@@ -429,12 +522,15 @@ class GatewayService:
                 product=request.product,
                 profile=request.profile,
                 route=route_id,
+                capacity_pool=profile.capacity_pool,
+                traffic_class=profile.traffic_class,
             ):
                 async with self.circuits.call(route_id):
+                    await self.claim_execution(request.request_id, "speech_synthesis")
                     result = await provider.synthesize(
                         model=profile.model,
                         input_text=request.input,
-                        voice=request.voice,
+                        voice=voice,
                         instructions=request.instructions,
                     )
         except GatewayError:
@@ -499,8 +595,11 @@ class GatewayService:
                 product=product,
                 profile=profile_name,
                 route=route_id,
+                capacity_pool=profile.capacity_pool,
+                traffic_class=profile.traffic_class,
             ):
                 async with self.circuits.call(route_id):
+                    await self.claim_execution(request_id, capability)
                     result = await provider.analyze_media(
                         model=profile.model,
                         system_instruction=system_instruction,
@@ -598,6 +697,44 @@ class GatewayService:
                 outputs=frozenset(request.outputs),
             )
 
+    def realtime_limits(
+        self,
+        *,
+        caller: str,
+        request: RealtimeTranslationStart | RealtimeStart,
+        profile_names: tuple[str, ...],
+        capability: str = "realtime_translation",
+    ) -> tuple[int, int, int, int, int]:
+        chunk_limits = [256 * 1024]
+        session_limits = [10 * 60]
+        accepted_limits = [512 * 1024 * 1024]
+        provider_buffer_limits = [256 * 1024]
+        outbound_limits = [1]
+        for profile_name in profile_names:
+            profile, _ = self.registry.resolve(
+                caller=caller,
+                product=request.product,
+                profile_name=profile_name,
+                capability=capability,
+            )
+            if profile.max_chunk_bytes is not None:
+                chunk_limits.append(profile.max_chunk_bytes)
+            if profile.max_session_seconds is not None:
+                session_limits.append(profile.max_session_seconds)
+            if profile.max_accepted_input_bytes is not None:
+                accepted_limits.append(profile.max_accepted_input_bytes)
+            if profile.max_provider_buffer_bytes is not None:
+                provider_buffer_limits.append(profile.max_provider_buffer_bytes)
+            if profile.max_outbound_events is not None:
+                outbound_limits.append(profile.max_outbound_events)
+        return (
+            min(chunk_limits),
+            min(session_limits),
+            min(accepted_limits),
+            min(provider_buffer_limits),
+            min(outbound_limits),
+        )
+
     def validate_realtime_translation_route(
         self,
         *,
@@ -667,12 +804,23 @@ class GatewayService:
         )
         self.circuits.record_failure(f"{profile.provider}.{profile.model}")
 
+    async def record_realtime_route_failure_shared(
+        self, *, caller: str, request: RealtimeTranslationStart, profile_name: str
+    ) -> None:
+        profile, _ = self.registry.resolve(
+            caller=caller,
+            product=request.product,
+            profile_name=profile_name,
+            capability="realtime_translation",
+        )
+        await self.circuits.record_shared_failure(f"{profile.provider}.{profile.model}")
+
     async def deliver_realtime_usage(
         self,
         *,
         request_id: UUID,
         caller: str,
-        request: RealtimeTranslationStart,
+        request: RealtimeTranslationStart | RealtimeStart,
         selected_profile: str,
         started_at: datetime,
         finished_at: datetime,
@@ -681,6 +829,7 @@ class GatewayService:
         source_audio_accepted_bytes: int,
         fallback_count: int,
         rotation_count: int,
+        capability: str = "realtime_translation",
     ) -> None:
         """Deliver one terminal realtime measurement through the same boundary."""
         if self.usage_delivery is None:
@@ -690,13 +839,13 @@ class GatewayService:
             caller=caller,
             product=request.product,
             profile_name=selected_profile,
-            capability="realtime_translation",
+            capability=capability,
         )
         accumulator = MeasurementAccumulator(
             request_id=request_id,
             workload_id=caller,
             product=request.product,
-            capability="realtime_translation",
+            capability=capability,
             profile=selected_profile,
             route_id=f"{selected.provider}.{selected.model}",
             started_at=started_at,

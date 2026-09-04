@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import inspect
 import time
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
@@ -21,6 +22,7 @@ from pydantic import ValidationError
 
 from app.container import Container
 from app.core.errors import GatewayError, REQUEST_INVALID, SERVICE_DRAINING
+from app.core.realtime_transcription_hedge import bridge_hedged_transcription
 from app.models import (
     AudioTranscriptionResponse,
     MediaAnalysisResponse,
@@ -269,9 +271,37 @@ def router_for(container: Container) -> APIRouter:
             except (ValidationError, ValueError, TypeError):
                 raise REQUEST_INVALID
             caller = principal.workload_id
+            profile_policy, _ = container.registry.resolve(
+                caller=caller,
+                product=start.product,
+                profile_name=start.profile,
+                capability="realtime_transcription",
+            )
             async with container.service.admission.lease(
-                caller, "realtime_transcription"
+                caller,
+                "realtime_transcription",
+                product=start.product,
+                profile=start.profile,
+                route=f"{profile_policy.provider}.{profile_policy.model}",
+                capacity_pool=profile_policy.capacity_pool,
+                traffic_class=profile_policy.traffic_class,
             ):
+                await container.service.claim_execution(
+                    start.request_id, "realtime_transcription"
+                )
+                if start.fallback_profile is not None:
+                    fallback_policy, fallback_provider = container.registry.resolve(
+                        caller=caller,
+                        product=start.product,
+                        profile_name=start.fallback_profile,
+                        capability="realtime_transcription",
+                    )
+                    container.registry.realtime_provider(fallback_provider)
+                    if (
+                        fallback_policy.provider == profile_policy.provider
+                        and fallback_policy.model == profile_policy.model
+                    ):
+                        raise REQUEST_INVALID
                 session = await container.service.open_realtime(
                     caller=caller, request=start
                 )
@@ -282,7 +312,30 @@ def router_for(container: Container) -> APIRouter:
                         "profile": start.profile,
                     }
                 )
-                await _bridge(websocket, session)
+                if start.fallback_profile is None:
+                    await _bridge(websocket, session)
+                else:
+                    async def open_profile(profile_name: str):
+                        request = start.model_copy(update={"profile": profile_name})
+                        return await container.service.open_realtime(
+                            caller=caller,
+                            request=request,
+                        )
+
+                    max_buffer_bytes = (
+                        start.audio_sample_rate_hz
+                        * 2
+                        * container.settings.realtime_hedge_buffer_seconds
+                    )
+                    await bridge_hedged_transcription(
+                        websocket,
+                        session,
+                        primary_profile=start.profile,
+                        fallback_profile=start.fallback_profile,
+                        open_profile=open_profile,
+                        hedge_delay_seconds=start.hedge_delay_seconds,
+                        max_buffer_bytes=max_buffer_bytes,
+                    )
         except WebSocketDisconnect:
             pass
         except GatewayError as error:
@@ -315,9 +368,24 @@ def router_for(container: Container) -> APIRouter:
             except (ValidationError, ValueError, TypeError):
                 raise REQUEST_INVALID
             caller = principal.workload_id
+            profile_policy, _ = container.registry.resolve(
+                caller=caller,
+                product=start.product,
+                profile_name=start.profile,
+                capability="realtime_translation",
+            )
             async with container.service.admission.lease(
-                caller, "realtime_translation"
+                caller,
+                "realtime_translation",
+                product=start.product,
+                profile=start.profile,
+                route=f"{profile_policy.provider}.{profile_policy.model}",
+                capacity_pool=profile_policy.capacity_pool,
+                traffic_class=profile_policy.traffic_class,
             ):
+                await container.service.claim_execution(
+                    start.request_id, "realtime_translation"
+                )
                 session = await container.service.open_realtime_translation(
                     caller=caller, request=start
                 )
@@ -354,39 +422,111 @@ def router_for(container: Container) -> APIRouter:
         await websocket.accept()
         session = None
         session_ref = [None]
+        usage_state = None
         try:
             try:
                 start = RealtimeStart.model_validate(await websocket.receive_json())
             except (ValidationError, ValueError, TypeError):
                 raise REQUEST_INVALID
             caller = principal.workload_id
+            profile_policy, _ = container.registry.resolve(
+                caller=caller,
+                product=start.product,
+                profile_name=start.profile,
+                capability="realtime_transcription",
+            )
             async with container.service.admission.lease(
-                caller, "realtime_transcription"
+                caller,
+                "realtime_transcription",
+                product=start.product,
+                profile=start.profile,
+                route=f"{profile_policy.provider}.{profile_policy.model}",
+                capacity_pool=profile_policy.capacity_pool,
+                traffic_class=profile_policy.traffic_class,
             ):
+                await container.service.claim_execution(
+                    start.request_id, "realtime_transcription"
+                )
+                usage_state = {
+                    "started_at": datetime.now(timezone.utc),
+                    "finished_at": None,
+                    "disposition": "disconnected",
+                    "source_audio_received_bytes": 0,
+                    "source_audio_accepted_bytes": 0,
+                    "fallback_count": 0,
+                    "rotation_count": 0,
+                    "delivered": False,
+                }
 
                 async def open_profile(_profile: str):
                     return await container.service.open_realtime(
                         caller=caller, request=start
                     )
 
+                async def deliver_usage() -> None:
+                    assert usage_state is not None
+                    if usage_state["delivered"]:
+                        return
+                    finished_at = usage_state["finished_at"] or datetime.now(
+                        timezone.utc
+                    )
+                    await container.service.deliver_realtime_usage(
+                        request_id=start.request_id,
+                        caller=caller,
+                        request=start,
+                        selected_profile=start.profile,
+                        started_at=usage_state["started_at"],
+                        finished_at=finished_at,
+                        disposition=usage_state["disposition"],
+                        source_audio_received_bytes=int(
+                            usage_state["source_audio_received_bytes"]
+                        ),
+                        source_audio_accepted_bytes=int(
+                            usage_state["source_audio_accepted_bytes"]
+                        ),
+                        fallback_count=0,
+                        rotation_count=int(usage_state["rotation_count"]),
+                        capability="realtime_transcription",
+                    )
+                    usage_state["delivered"] = True
+
                 session = await open_profile(start.profile)
                 session_ref[0] = session
+                limits = container.service.realtime_limits(
+                    caller=caller,
+                    request=start,
+                    profile_names=(start.profile,),
+                    capability="realtime_transcription",
+                )
                 await _bridge_v2(
                     websocket,
                     session,
                     request_id=start.request_id,
                     profile=start.profile,
+                    open_profile=open_profile,
                     audio_sample_rate_hz=start.audio_sample_rate_hz,
                     outputs=["source_transcript"],
-                    open_profile=open_profile,
                     session_ref=session_ref,
+                    usage_state=usage_state,
+                    deliver_usage=deliver_usage,
                     is_draining=lambda: container.draining,
+                    max_chunk_bytes=limits[0],
+                    max_session_seconds=limits[1],
+                    max_accepted_input_bytes=limits[2],
+                    max_provider_buffer_bytes=limits[3],
+                    max_outbound_events=limits[4],
                 )
         except WebSocketDisconnect:
             pass
         except GatewayError as error:
             await _safe_error(websocket, error)
         finally:
+            if usage_state is not None and not usage_state["delivered"]:
+                usage_state["finished_at"] = datetime.now(timezone.utc)
+                try:
+                    await deliver_usage()
+                except GatewayError:
+                    pass
             if session_ref[0] is not None:
                 await session_ref[0].close()
             elif session is not None:
@@ -426,9 +566,24 @@ def router_for(container: Container) -> APIRouter:
                     "Realtime comparison is not enabled yet.",
                 )
             caller = principal.workload_id
+            profile_policy, _ = container.registry.resolve(
+                caller=caller,
+                product=start.product,
+                profile_name=start.profile,
+                capability="realtime_translation",
+            )
             async with container.service.admission.lease(
-                caller, "realtime_translation"
+                caller,
+                "realtime_translation",
+                product=start.product,
+                profile=start.profile,
+                route=f"{profile_policy.provider}.{profile_policy.model}",
+                capacity_pool=profile_policy.capacity_pool,
+                traffic_class=profile_policy.traffic_class,
             ):
+                await container.service.claim_execution(
+                    start.request_id, "realtime_translation"
+                )
                 request = RealtimeTranslationStart(
                     type=start.type,
                     request_id=start.request_id,
@@ -491,8 +646,29 @@ def router_for(container: Container) -> APIRouter:
 
                 usage_delivery_callback = deliver_usage
 
+                async def record_route_failure(profile_name: str) -> None:
+                    await container.service.record_realtime_route_failure_shared(
+                        caller=caller, request=request, profile_name=profile_name
+                    )
+
                 session = await open_profile(start.profile)
                 session_ref[0] = session
+                limit_profiles = tuple(
+                    name
+                    for name in (start.profile, start.fallback_profile)
+                    if name is not None
+                )
+                (
+                    max_chunk_bytes,
+                    max_session_seconds,
+                    max_accepted_input_bytes,
+                    max_provider_buffer_bytes,
+                    max_outbound_events,
+                ) = container.service.realtime_limits(
+                    caller=caller,
+                    request=request,
+                    profile_names=limit_profiles,
+                )
                 await _bridge_v2(
                     websocket,
                     session,
@@ -506,14 +682,15 @@ def router_for(container: Container) -> APIRouter:
                     target_language=start.target_language,
                     open_profile=open_profile,
                     session_ref=session_ref,
-                    record_failure=lambda profile_name: (
-                        container.service.record_realtime_route_failure(
-                            caller=caller, request=request, profile_name=profile_name
-                        )
-                    ),
+                    record_failure=record_route_failure,
                     usage_state=usage_state,
                     deliver_usage=usage_delivery_callback,
                     is_draining=lambda: container.draining,
+                    max_chunk_bytes=max_chunk_bytes,
+                    max_session_seconds=max_session_seconds,
+                    max_accepted_input_bytes=max_accepted_input_bytes,
+                    max_provider_buffer_bytes=max_provider_buffer_bytes,
+                    max_outbound_events=max_outbound_events,
                 )
         except WebSocketDisconnect:
             pass
@@ -617,8 +794,13 @@ async def _bridge_v2(
     usage_state: dict[str, object] | None = None,
     deliver_usage=None,
     is_draining=None,
+    max_chunk_bytes: int = 256 * 1024,
+    max_session_seconds: int = 10 * 60,
+    max_accepted_input_bytes: int = 512 * 1024 * 1024,
+    max_provider_buffer_bytes: int = 256 * 1024,
+    max_outbound_events: int = 1,
 ) -> None:
-    max_chunk_bytes = 256 * 1024
+    max_chunk_bytes = min(max_chunk_bytes, max_provider_buffer_bytes)
     # The bridge awaits provider acceptance before reading another client frame;
     # Gateway-owned in-flight audio is therefore bounded to one chunk.
     max_unacknowledged_chunks = 1
@@ -630,6 +812,7 @@ async def _bridge_v2(
     accepted_sequence = 0
     input_sequence = 0
     accepted_chunks = 0
+    accepted_bytes = 0
     usage_final_sent = False
     switch_count = 0
     rotation_count = 0
@@ -680,7 +863,7 @@ async def _bridge_v2(
     async def close_for_provider_output_violation() -> None:
         nonlocal output_sequence
         if record_failure is not None:
-            record_failure(active_profile)
+            await _invoke_failure(record_failure, active_profile)
         await send_usage_final("provider_failed")
         output_sequence += 1
         await send_event(
@@ -712,13 +895,34 @@ async def _bridge_v2(
             "sequence": 0,
             "max_chunk_bytes": max_chunk_bytes,
             "max_unacknowledged_chunks": max_unacknowledged_chunks,
-            "max_unacknowledged_bytes": max_unacknowledged_bytes,
-            "max_outbound_events": 1,
+            "max_unacknowledged_bytes": min(
+                max_unacknowledged_bytes, max_provider_buffer_bytes
+            ),
+            "max_outbound_events": max_outbound_events,
             "audio_sample_rate_hz": audio_sample_rate_hz,
             "outputs": outputs or ["target_transcript", "translated_audio"],
         }
     )
     while True:
+        if time.monotonic() - session_started >= max_session_seconds:
+            await send_usage_final("complete")
+            output_sequence += 1
+            await send_event(
+                {
+                    "type": "session.closed",
+                    "session_id": session_id,
+                    "window_id": window_id,
+                    "lane_id": lane_id,
+                    "provider_ref": active_profile,
+                    "sequence": output_sequence,
+                    "accepted_sequence": accepted_sequence,
+                    "output_sequence": output_sequence,
+                    "disposition": "complete",
+                    "retryable": False,
+                    "failure_stage": None,
+                }
+            )
+            return
         client_task = asyncio.create_task(websocket.receive_json())
         provider_task = asyncio.create_task(session.next_event())
         drain_task = (
@@ -797,7 +1001,7 @@ async def _bridge_v2(
                             session_ref[0] = session
                     except Exception:
                         if record_failure is not None:
-                            record_failure(active_profile)
+                            await _invoke_failure(record_failure, active_profile)
                         await send_usage_final("provider_failed")
                         output_sequence += 1
                         await send_event(
@@ -836,7 +1040,7 @@ async def _bridge_v2(
                     )
                     continue
                 if record_failure is not None:
-                    record_failure(active_profile)
+                    await _invoke_failure(record_failure, active_profile)
                 switch_count += 1
                 if switch_count > max_switches:
                     await send_usage_final("provider_failed")
@@ -921,7 +1125,7 @@ async def _bridge_v2(
                         session_ref[0] = session
                 except Exception:
                     if record_failure is not None:
-                        record_failure(fallback_profile)
+                        await _invoke_failure(record_failure, fallback_profile)
                     await send_usage_final("provider_failed")
                     output_sequence += 1
                     await send_event(
@@ -1011,6 +1215,8 @@ async def _bridge_v2(
                         raise REQUEST_INVALID
                     audio_bytes = _decoded_audio_size(append.audio)
                     if audio_bytes > max_chunk_bytes:
+                        raise REQUEST_INVALID
+                    if accepted_bytes + audio_bytes > max_accepted_input_bytes:
                         raise REQUEST_INVALID
                     if usage_state is not None:
                         usage_state["source_audio_received_bytes"] = (
@@ -1131,6 +1337,7 @@ async def _bridge_v2(
                     input_sequence = append.sequence
                     accepted_sequence = input_sequence
                     accepted_chunks += 1
+                    accepted_bytes += audio_bytes
                     if usage_state is not None:
                         usage_state["source_audio_accepted_bytes"] = (
                             int(usage_state["source_audio_accepted_bytes"])
@@ -1180,6 +1387,12 @@ def _decoded_audio_size(value: str) -> int:
         return len(base64.b64decode(value, validate=True))
     except (binascii.Error, ValueError) as error:
         raise REQUEST_INVALID from error
+
+
+async def _invoke_failure(callback, profile_name: str) -> None:
+    result = callback(profile_name)
+    if inspect.isawaitable(result):
+        await result
 
 
 async def _wait_until_draining(is_draining) -> None:

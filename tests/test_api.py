@@ -251,6 +251,33 @@ def test_text_generation_is_service_authenticated_and_profile_routed(
     assert fake_provider.generated_inputs == ["Private lecture text."]
 
 
+def test_repeated_request_id_cannot_duplicate_provider_work(
+    client: TestClient, headers: dict[str, str], fake_provider: FakeProvider
+) -> None:
+    payload = {
+        "request_id": str(uuid4()),
+        "product": "classroom",
+        "profile": "classroom.translation.economy",
+        "system_instruction": "Translate faithfully.",
+        "input": "One provider execution.",
+    }
+    assert (
+        client.post(
+            "/ai/v1/text/generations", headers=headers, json=payload
+        ).status_code
+        == 200
+    )
+    duplicate = client.post("/ai/v1/text/generations", headers=headers, json=payload)
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"] == {
+        "code": "ai_gateway_request_already_accepted",
+        "message": "This request identifier has already been accepted for provider execution.",
+        "retryable": False,
+        "retry_after_ms": None,
+    }
+    assert fake_provider.generated_inputs.count("One provider execution.") == 1
+
+
 def test_batch_text_generation_delivers_content_free_usage(
     client: TestClient, headers: dict[str, str]
 ) -> None:
@@ -704,11 +731,15 @@ def test_realtime_transcription_bridge(
     assert fake_provider.realtime.closed_event.wait(timeout=1)
 
 
-def test_realtime_v2_transcription_acknowledges_input(
+def test_realtime_v2_transcription_acknowledges_and_measures(
     client: TestClient,
     headers: dict[str, str],
     fake_provider: FakeProvider,
 ) -> None:
+    sink = _CaptureUsageSink()
+    client.app.state.container.service.usage_delivery = UsageDelivery(
+        sink, max_attempts=1, retry_delay_seconds=0
+    )
     request_id = str(uuid4())
     with client.websocket_connect(
         "/ai/v2/realtime/transcriptions", headers=headers
@@ -744,6 +775,40 @@ def test_realtime_v2_transcription_acknowledges_input(
 
     assert fake_provider.realtime.appended == ["AQI="]
     assert fake_provider.realtime.closed_event.wait(timeout=1)
+    assert len(sink.measurements) == 1
+    measurement = sink.measurements[0]
+    assert str(measurement.request_id) == request_id
+    assert measurement.capability == "realtime_transcription"
+    assert measurement.source_audio_accepted_bytes.value == 2
+
+
+def test_realtime_request_id_cannot_open_duplicate_provider_session(
+    client: TestClient, headers: dict[str, str]
+) -> None:
+    request_id = str(uuid4())
+    start = {
+        "type": "session.start",
+        "request_id": request_id,
+        "product": "classroom",
+        "profile": "classroom.transcription.live",
+        "source_language": "en",
+    }
+    with client.websocket_connect(
+        "/ai/v2/realtime/transcriptions", headers=headers
+    ) as socket:
+        socket.send_json(start)
+        assert socket.receive_json()["type"] == "session.ready"
+        socket.send_json({"type": "session.stop"})
+        assert socket.receive_json()["type"] == "usage.final"
+        assert socket.receive_json()["type"] == "session.closed"
+
+    with client.websocket_connect(
+        "/ai/v2/realtime/transcriptions", headers=headers
+    ) as socket:
+        socket.send_json(start)
+        error = socket.receive_json()
+        assert error["type"] == "error"
+        assert error["error"]["code"] == "ai_gateway_request_already_accepted"
 
 
 def test_realtime_translation_bridge(
