@@ -855,6 +855,7 @@ async def _bridge_v2(
                 "sequence": output_sequence,
                 "duration_ms": max(0, int((time.monotonic() - session_started) * 1000)),
                 "accepted_input_chunks": accepted_chunks,
+                "disposition": disposition,
                 "fallback_count": switch_count,
                 "rotation_count": rotation_count,
             }
@@ -899,6 +900,10 @@ async def _bridge_v2(
                 max_unacknowledged_bytes, max_provider_buffer_bytes
             ),
             "max_outbound_events": max_outbound_events,
+            "max_session_seconds": max_session_seconds,
+            "max_accepted_input_bytes": max_accepted_input_bytes,
+            "window_seconds": window_seconds,
+            "idle_timeout_seconds": 0,
             "audio_sample_rate_hz": audio_sample_rate_hz,
             "outputs": outputs or ["target_transcript", "translated_audio"],
         }

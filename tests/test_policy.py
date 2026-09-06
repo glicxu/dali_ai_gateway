@@ -222,6 +222,16 @@ def test_interprete_has_an_independent_disabled_workload_and_profiles() -> None:
         for name in grant.profiles
     )
     assert settings.caller_limits()["interpreter_server_ai"] == 2
+    assert generation.profiles["interprete.transcription.realtime"].provider == "gemini"
+    assert (
+        generation.profiles["interprete.transcription.realtime"].model
+        == "gemini-3.5-transcribe-live"
+    )
+    assert generation.profiles["interprete.translation.realtime"].provider == "gemini"
+    assert (
+        generation.profiles["interprete.translation.realtime"].model
+        == "gemini-3.5-live-translate-preview"
+    )
 
 
 def test_admission_lease_ttl_is_explicitly_bounded() -> None:

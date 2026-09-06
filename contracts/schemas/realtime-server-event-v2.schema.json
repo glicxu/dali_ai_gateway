@@ -5,7 +5,7 @@
   "oneOf": [
     {
       "type": "object", "additionalProperties": false,
-      "required": ["type", "session_id", "request_id", "window_id", "lane_id", "profile", "provider_ref", "sequence"],
+      "required": ["type", "session_id", "request_id", "window_id", "lane_id", "profile", "provider_ref", "sequence", "max_chunk_bytes", "max_unacknowledged_chunks", "max_unacknowledged_bytes", "max_outbound_events", "max_session_seconds", "max_accepted_input_bytes", "window_seconds", "idle_timeout_seconds", "audio_sample_rate_hz", "outputs"],
       "properties": {
         "type": {"const": "session.ready"}, "request_id": {"type": "string", "format": "uuid"},
         "session_id": {"type": "string", "format": "uuid"}, "window_id": {"type": "string"}, "lane_id": {"type": "string"}, "profile": {"type": "string"},
@@ -14,6 +14,10 @@
         "max_unacknowledged_chunks": {"type": "integer", "minimum": 1},
         "max_unacknowledged_bytes": {"type": "integer", "minimum": 1},
         "max_outbound_events": {"type": "integer", "minimum": 1},
+        "max_session_seconds": {"type": "integer", "minimum": 30},
+        "max_accepted_input_bytes": {"type": "integer", "minimum": 1},
+        "window_seconds": {"enum": [60, 90, 120]},
+        "idle_timeout_seconds": {"type": "integer", "minimum": 0},
         "audio_sample_rate_hz": {"enum": [16000, 24000]},
         "outputs": {"type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true,
           "items": {"enum": ["source_transcript", "target_transcript", "translated_audio"]}}
@@ -73,10 +77,11 @@
     },
     {
       "type": "object", "additionalProperties": false,
-      "required": ["type", "session_id", "window_id", "lane_id", "provider_ref", "sequence", "duration_ms", "accepted_input_chunks"],
+      "required": ["type", "session_id", "window_id", "lane_id", "provider_ref", "sequence", "duration_ms", "accepted_input_chunks", "disposition"],
       "properties": {
         "type": {"const": "usage.final"}, "session_id": {"type": "string", "format": "uuid"}, "window_id": {"type": "string"}, "lane_id": {"type": "string"}, "provider_ref": {"type": "string"},
         "sequence": {"type": "integer", "minimum": 0}, "duration_ms": {"type": "integer", "minimum": 0}, "accepted_input_chunks": {"type": "integer", "minimum": 0},
+        "disposition": {"enum": ["complete", "partial", "disconnected", "cancelled", "timed_out", "provider_failed", "slow_consumer", "ambiguous"]},
         "fallback_count": {"type": "integer", "minimum": 0}, "rotation_count": {"type": "integer", "minimum": 0}
       }
     },

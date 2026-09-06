@@ -189,8 +189,8 @@ DEFAULT_PROFILES: dict[str, dict[str, object]] = {
     "interprete.transcription.realtime": {
         "capacity_pool": "interprete_realtime",
         "capability": "realtime_transcription",
-        "provider": "openai",
-        "model": "gpt-4o-mini-transcribe",
+        "provider": "gemini",
+        "model": "gemini-3.5-transcribe-live",
         "required_for_readiness": False,
         "max_chunk_bytes": 262144,
         "max_session_seconds": 600,
@@ -201,8 +201,8 @@ DEFAULT_PROFILES: dict[str, dict[str, object]] = {
     "interprete.translation.realtime": {
         "capacity_pool": "interprete_realtime",
         "capability": "realtime_translation",
-        "provider": "openai",
-        "model": "gpt-realtime-translate",
+        "provider": "gemini",
+        "model": "gemini-3.5-live-translate-preview",
         "required_for_readiness": False,
         "max_chunk_bytes": 262144,
         "max_session_seconds": 600,

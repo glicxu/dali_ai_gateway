@@ -89,12 +89,32 @@ def test_v2_server_event_examples_validate_against_schema() -> None:
             "type": "session.ready",
             "request_id": base["session_id"],
             "profile": base["provider_ref"],
+            "max_chunk_bytes": 262144,
+            "max_unacknowledged_chunks": 1,
+            "max_unacknowledged_bytes": 262144,
+            "max_outbound_events": 1,
+            "max_session_seconds": 600,
+            "max_accepted_input_bytes": 62914560,
+            "window_seconds": 90,
+            "idle_timeout_seconds": 0,
+            "audio_sample_rate_hz": 24000,
+            "outputs": [
+                "source_transcript",
+                "target_transcript",
+                "translated_audio",
+            ],
         },
         base | {"type": "audio.accepted", "accepted_sequence": 1},
         base | {"type": "translation.delta", "text": "hello"},
         base | {"type": "translation.audio.delta", "audio": "AQI="},
         base | {"type": "translation.audio.final"},
-        base | {"type": "usage.final", "duration_ms": 1000, "accepted_input_chunks": 1},
+        base
+        | {
+            "type": "usage.final",
+            "duration_ms": 1000,
+            "accepted_input_chunks": 1,
+            "disposition": "complete",
+        },
         base
         | {
             "type": "session.rotation_required",

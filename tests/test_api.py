@@ -1060,6 +1060,10 @@ def test_realtime_v2_automatically_fails_over_at_provider_error() -> None:
             assert ready["max_unacknowledged_chunks"] == 1
             assert ready["max_unacknowledged_bytes"] == 256 * 1024
             assert ready["max_outbound_events"] == 1
+            assert ready["max_session_seconds"] == 600
+            assert ready["max_accepted_input_bytes"] == 512 * 1024 * 1024
+            assert ready["window_seconds"] == 90
+            assert ready["idle_timeout_seconds"] == 0
             socket.send_json({"type": "audio.append", "sequence": 1, "audio": "AQI="})
             events = [socket.receive_json(), socket.receive_json()]
             if events[0]["type"] != "window.failed":
