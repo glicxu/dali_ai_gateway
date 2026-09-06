@@ -29,7 +29,7 @@ def _env(path: Path) -> None:
         f"AI_GATEWAY_WORKLOAD_GRANTS_JSON='{json.dumps(grants)}'\n"
         "AI_GATEWAY_PLATFORM_WORKLOAD_AUTH_ENABLED=false\n"
         "AI_GATEWAY_PLATFORM_WORKLOAD_AUTH_REQUIRED_FOR_READINESS=false\n"
-        "AI_GATEWAY_PLATFORM_WORKLOAD_IDS_JSON='[]'\n",
+        "AI_GATEWAY_PLATFORM_WORKLOAD_IDS_JSON=[]\n",
         encoding="utf-8",
     )
 

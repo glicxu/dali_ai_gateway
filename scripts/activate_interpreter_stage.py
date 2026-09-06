@@ -28,6 +28,8 @@ INTERPRETER_CAPABILITIES = (
 
 
 def _decode(raw: str) -> str:
+    if not raw.startswith(("'", '"')):
+        return raw
     parsed = shlex.split(raw, comments=False, posix=True)
     if len(parsed) != 1:
         raise ValueError("environment value is malformed")
