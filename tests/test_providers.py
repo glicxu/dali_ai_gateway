@@ -113,7 +113,7 @@ def test_openai_text_batch_and_realtime_protocols() -> None:
     asyncio.run(exercise())
 
 
-def test_openai_gpt_5_6_omits_unsupported_temperature() -> None:
+def test_openai_gpt_5_family_omits_unsupported_temperature() -> None:
     async def exercise() -> None:
         captured: dict[str, object] = {}
 
@@ -134,17 +134,19 @@ def test_openai_gpt_5_6_omits_unsupported_temperature() -> None:
             timeout_seconds=5,
             client=client,
         )
-        result = await provider.generate(
-            model="gpt-5.6-terra",
-            system_instruction="Answer helpfully.",
-            input_text="Hello",
-            response_format="text",
-            temperature=0.2,
-        )
+        for model in ("gpt-5-mini", "gpt-5.6-terra"):
+            captured.clear()
+            result = await provider.generate(
+                model=model,
+                system_instruction="Answer helpfully.",
+                input_text="Hello",
+                response_format="text",
+                temperature=0.2,
+            )
 
-        assert result.output == "Hello."
-        assert captured["model"] == "gpt-5.6-terra"
-        assert "temperature" not in captured
+            assert result.output == "Hello."
+            assert captured["model"] == model
+            assert "temperature" not in captured
         await client.aclose()
 
     asyncio.run(exercise())

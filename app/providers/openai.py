@@ -69,7 +69,10 @@ class OpenAIProvider:
                 {"role": "user", "content": input_text},
             ],
         }
-        if not model.startswith("gpt-5.6"):
+        # OpenAI's GPT-5 family only accepts its default temperature. Sending
+        # the Gateway's normalized value (usually zero) makes an otherwise
+        # valid request fail with HTTP 400.
+        if not model.startswith("gpt-5"):
             payload["temperature"] = temperature
         if response_format == "json":
             payload["response_format"] = {"type": "json_object"}
