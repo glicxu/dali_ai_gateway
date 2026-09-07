@@ -210,6 +210,18 @@ DEFAULT_PROFILES: dict[str, dict[str, object]] = {
         "max_provider_buffer_bytes": 262144,
         "max_outbound_events": 1,
     },
+    "interprete.translation.realtime.openai": {
+        "capacity_pool": "interprete_realtime",
+        "capability": "realtime_translation",
+        "provider": "openai",
+        "model": "gpt-realtime-translate",
+        "required_for_readiness": False,
+        "max_chunk_bytes": 262144,
+        "max_session_seconds": 600,
+        "max_accepted_input_bytes": 62914560,
+        "max_provider_buffer_bytes": 262144,
+        "max_outbound_events": 1,
+    },
     "interprete.speech.standard": {
         "capacity_pool": "interprete",
         "capability": "speech_synthesis",
@@ -313,6 +325,7 @@ DEFAULT_WORKLOAD_GRANTS: dict[str, dict[str, object]] = {
             "interprete.transcription.batch",
             "interprete.transcription.realtime",
             "interprete.translation.realtime",
+            "interprete.translation.realtime.openai",
             "interprete.speech.standard",
         ],
         "capabilities": [

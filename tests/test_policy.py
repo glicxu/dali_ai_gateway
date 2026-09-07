@@ -232,6 +232,10 @@ def test_interprete_has_an_independent_disabled_workload_and_profiles() -> None:
         generation.profiles["interprete.translation.realtime"].model
         == "gemini-3.5-live-translate-preview"
     )
+    assert (
+        generation.profiles["interprete.translation.realtime.openai"].provider
+        == "openai"
+    )
 
 
 def test_admission_lease_ttl_is_explicitly_bounded() -> None:

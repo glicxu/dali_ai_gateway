@@ -17,6 +17,7 @@ INTERPRETE_GRANT = {
         "interprete.transcription.batch",
         "interprete.transcription.realtime",
         "interprete.translation.realtime",
+        "interprete.translation.realtime.openai",
         "interprete.speech.standard",
     ],
     "capabilities": [

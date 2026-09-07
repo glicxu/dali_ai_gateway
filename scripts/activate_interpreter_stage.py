@@ -16,6 +16,7 @@ INTERPRETER_PROFILES = (
     "interprete.transcription.batch",
     "interprete.transcription.realtime",
     "interprete.translation.realtime",
+    "interprete.translation.realtime.openai",
     "interprete.speech.standard",
 )
 INTERPRETER_CAPABILITIES = (
@@ -107,7 +108,7 @@ def activate(
         platform_ids.append(WORKLOAD_ID)
 
     updates = {
-        "AI_GATEWAY_POLICY_GENERATION_ID": "aws-us2-interpreter-stage-v8",
+        "AI_GATEWAY_POLICY_GENERATION_ID": "aws-us2-interpreter-stage-v9",
         "AI_GATEWAY_WORKLOAD_GRANTS_JSON": _quoted(
             json.dumps(grants, separators=(",", ":"), sort_keys=True)
         ),
