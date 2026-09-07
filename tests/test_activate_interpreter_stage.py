@@ -81,3 +81,34 @@ def test_activation_rejects_profile_boundary_drift(tmp_path: Path) -> None:
             jwks_url="https://server.dalifin.com/.well-known/jwks.json",
             backup_suffix="phase1",
         )
+
+
+def test_activation_adds_interpreter_realtime_fallback_to_previous_boundary(
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / "gateway.env"
+    _env(env_file)
+    values = _read(env_file)
+    grants = json.loads(values["AI_GATEWAY_WORKLOAD_GRANTS_JSON"])
+    grants["interpreter_server_ai"]["profiles"].remove(
+        "interprete.translation.realtime.openai"
+    )
+    env_file.write_text(
+        env_file.read_text(encoding="utf-8").replace(
+            f"'{values['AI_GATEWAY_WORKLOAD_GRANTS_JSON']}'",
+            f"'{json.dumps(grants)}'",
+        ),
+        encoding="utf-8",
+    )
+
+    activate(
+        env_file,
+        issuer="https://server.dalifin.com",
+        jwks_url="https://server.dalifin.com/.well-known/jwks.json",
+        backup_suffix="fallback",
+    )
+
+    activated = json.loads(
+        _read(env_file)["AI_GATEWAY_WORKLOAD_GRANTS_JSON"]
+    )["interpreter_server_ai"]
+    assert "interprete.translation.realtime.openai" in activated["profiles"]

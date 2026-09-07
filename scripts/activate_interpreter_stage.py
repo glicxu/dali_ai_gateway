@@ -91,8 +91,15 @@ def activate(
         raise ValueError("Interpreter workload grant is malformed")
     if set(grant.get("products", [])) != {"interprete"}:
         raise ValueError("Interpreter workload product boundary changed")
-    if set(grant.get("profiles", [])) != set(INTERPRETER_PROFILES):
+    configured_profiles = frozenset(grant.get("profiles", []))
+    expected_profiles = set(INTERPRETER_PROFILES)
+    previous_profiles = expected_profiles - {"interprete.translation.realtime.openai"}
+    if configured_profiles not in {
+        frozenset(expected_profiles),
+        frozenset(previous_profiles),
+    }:
         raise ValueError("Interpreter workload profile boundary changed")
+    grant["profiles"] = list(INTERPRETER_PROFILES)
     if set(grant.get("capabilities", [])) != set(INTERPRETER_CAPABILITIES):
         raise ValueError("Interpreter workload capability boundary changed")
     grant["enabled"] = True
