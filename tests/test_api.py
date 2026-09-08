@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import asyncio
 import json
+from threading import Event
 from uuid import uuid4
 
 import pytest
@@ -131,9 +132,11 @@ class _SlowWebSocket:
 class _CaptureUsageSink:
     def __init__(self) -> None:
         self.measurements = []
+        self.delivered = Event()
 
     async def put(self, measurement):
         self.measurements.append(measurement)
+        self.delivered.set()
         return "accepted"
 
 
@@ -990,6 +993,11 @@ def test_realtime_v2_disconnect_closes_provider_session(
             }
         )
         assert socket.receive_json()["type"] == "session.ready"
+        # Send a real disconnect and await cleanup before TestClient cancels
+        # its ASGI task on context exit. Otherwise this tests a teardown race.
+        socket.close()
+        assert fake_provider.realtime_translation.closed_event.wait(timeout=1)
+        assert sink.delivered.wait(timeout=1)
     assert fake_provider.realtime_translation.closed_event.wait(timeout=1)
     assert len(sink.measurements) == 1
     assert sink.measurements[0].disposition == "disconnected"

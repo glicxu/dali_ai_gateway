@@ -1,0 +1,24 @@
+[Unit]
+Description=Dali Audio test Gateway (isolated us3)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=dali-audio-test
+Group=dali-audio-test
+WorkingDirectory=/data/dali/test/services/dali-audio-gateway/current
+EnvironmentFile=/data/dali/test/config/secrets/dali_audio_gateway.env
+ExecStart=/data/dali/test/services/dali-audio-gateway/current/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 15040 --no-access-log
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+MemoryMax=1G
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

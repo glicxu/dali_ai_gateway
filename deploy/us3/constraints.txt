@@ -1,0 +1,2 @@
+# Match the locally validated async runtime for this test release.
+anyio==4.14.2

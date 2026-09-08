@@ -317,6 +317,7 @@ def test_openai_speech_uses_audio_speech_endpoint() -> None:
         )
 
         assert result.audio == b"RIFF-openai"
+        assert result.usage.input_tokens is None
         assert captured == {
             "model": "gpt-4o-mini-tts",
             "input": "Hello.",

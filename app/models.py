@@ -60,6 +60,19 @@ class SpeechSynthesisRequest(StrictModel):
     input: str = Field(min_length=1, max_length=4_096)
     voice: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
     instructions: str = Field(default="", max_length=1_000)
+    configuration_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
+class SpeechCapabilities(StrictModel):
+    profile: str
+    configuration_id: str
+    provider: str
+    model: str
+    voices: list[str] | None
+    max_input_characters: int = 4_096
+    max_instructions_characters: int = 1_000
+    max_input_bytes: int | None
+    instructions_semantics: Literal["best_effort"] = "best_effort"
 
 
 class RealtimeStart(StrictModel):

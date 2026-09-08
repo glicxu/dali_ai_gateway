@@ -5,6 +5,7 @@ import audioop
 import base64
 import binascii
 import json
+import wave
 from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -13,6 +14,7 @@ from websockets.asyncio.client import connect as websocket_connect
 
 from app.core.errors import PROVIDER_UNAVAILABLE, REQUEST_INVALID
 from app.models import UsageMeasurement
+from app.providers.audio import finalize_pcm_wav
 from app.providers.base import (
     MediaResult,
     RealtimeEvent,
@@ -157,12 +159,16 @@ class OpenAIProvider:
             raise PROVIDER_UNAVAILABLE from error
         if not response.content:
             raise PROVIDER_UNAVAILABLE
+        try:
+            audio = finalize_pcm_wav(response.content)
+        except (wave.Error, EOFError, ValueError) as error:
+            raise PROVIDER_UNAVAILABLE from error
         return SpeechResult(
-            audio=response.content,
+            audio=audio,
             content_type=response.headers.get("content-type", "audio/wav").split(
                 ";", 1
             )[0],
-            usage=UsageMeasurement(input_tokens=len(input_text)),
+            usage=UsageMeasurement(),
         )
 
     async def analyze_media(

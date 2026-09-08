@@ -13,6 +13,7 @@ from fastapi import (
     File,
     Form,
     Header,
+    Query,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
@@ -32,6 +33,7 @@ from app.models import (
     RealtimeTranslationStart,
     RealtimeV2AudioAppend,
     RealtimeV2TranslationStart,
+    SpeechCapabilities,
     SpeechSynthesisRequest,
     TextGenerationRequest,
     TextGenerationResponse,
@@ -174,6 +176,27 @@ def router_for(container: Container) -> APIRouter:
             terminology_prompt=terminology_prompt,
         )
 
+    @router.get(
+        "/ai/v1/audio/speech/capabilities",
+        response_model=SpeechCapabilities,
+        tags=["AI"],
+    )
+    async def speech_capabilities(
+        product: str = Query(pattern=r"^[a-z][a-z0-9_-]{1,63}$"),
+        profile: str = Query(pattern=r"^[a-z][a-z0-9_.-]{2,127}$"),
+        authorization: str | None = Header(default=None),
+        caller: str | None = Header(default=None, alias="X-Dali-Caller"),
+    ) -> SpeechCapabilities:
+        ensure_accepting()
+        principal = await container.authenticator.authenticate_workload(
+            caller, authorization
+        )
+        return container.service.speech_capabilities(
+            caller=principal.workload_id,
+            product=product,
+            profile_name=profile,
+        )
+
     @router.post(
         "/ai/v1/audio/speech",
         response_class=Response,
@@ -189,12 +212,16 @@ def router_for(container: Container) -> APIRouter:
         principal = await container.authenticator.authenticate_workload(
             caller, authorization
         )
-        result, provider, model = await container.service.synthesize_speech(
-            caller=principal.workload_id, request=request
+        result, provider, model, configuration_id = (
+            await container.service.synthesize_speech(
+                caller=principal.workload_id, request=request
+            )
         )
         headers = {
             "X-Dali-Provider": provider,
             "X-Dali-Model": model,
+            "X-Dali-Speech-Configuration": configuration_id,
+            "Cache-Control": "no-store",
         }
         if result.usage.input_tokens is not None:
             headers["X-Dali-Input-Tokens"] = str(result.usage.input_tokens)

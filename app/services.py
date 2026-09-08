@@ -20,15 +20,18 @@ from app.core.errors import (
     PROVIDER_OUTCOME_AMBIGUOUS,
     REQUEST_INVALID,
     REQUEST_ALREADY_ACCEPTED,
+    SPEECH_CONFIGURATION_CHANGED,
     USAGE_DELIVERY_UNCONFIRMED,
 )
 from app.core.measurement import MeasurementAccumulator, MeasurementDisposition
+from app.core.speech import speech_configuration_id
 from app.core.usage_delivery import UsageDelivery, UsageDeliveryError
 from app.models import (
     AudioTranscriptionResponse,
     MediaAnalysisResponse,
     RealtimeStart,
     RealtimeTranslationStart,
+    SpeechCapabilities,
     SpeechSynthesisRequest,
     TextGenerationRequest,
     TextGenerationResponse,
@@ -492,9 +495,28 @@ class GatewayService:
             usage=result.usage,
         )
 
+    def speech_capabilities(
+        self, *, caller: str, product: str, profile_name: str
+    ) -> SpeechCapabilities:
+        profile, raw_provider = self.registry.resolve(
+            caller=caller,
+            product=product,
+            profile_name=profile_name,
+            capability="speech_synthesis",
+        )
+        self.registry.speech_provider(raw_provider)
+        return SpeechCapabilities(
+            profile=profile.name,
+            configuration_id=speech_configuration_id(profile),
+            provider=profile.provider,
+            model=profile.model,
+            voices=sorted(profile.voice_routes) if profile.voice_routes else None,
+            max_input_bytes=profile.max_input_bytes,
+        )
+
     async def synthesize_speech(
         self, *, caller: str, request: SpeechSynthesisRequest
-    ) -> tuple[SpeechResult, str, str]:
+    ) -> tuple[SpeechResult, str, str, str]:
         started_at = datetime.now(timezone.utc)
         profile, raw_provider = self.registry.resolve(
             caller=caller,
@@ -503,6 +525,12 @@ class GatewayService:
             capability="speech_synthesis",
         )
         provider = self.registry.speech_provider(raw_provider)
+        configuration_id = speech_configuration_id(profile)
+        if (
+            request.configuration_id is not None
+            and request.configuration_id != configuration_id
+        ):
+            raise SPEECH_CONFIGURATION_CHANGED
         if (
             profile.max_input_bytes is not None
             and len((request.input + request.instructions).encode("utf-8"))
@@ -560,7 +588,7 @@ class GatewayService:
                 "generated_audio_bytes": (len(result.audio), "gateway_observed"),
             },
         )
-        return result, profile.provider, profile.model
+        return result, profile.provider, profile.model, configuration_id
 
     async def analyze_media(
         self,

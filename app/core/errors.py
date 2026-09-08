@@ -68,6 +68,11 @@ REQUEST_INVALID = GatewayError(
     "ai_gateway_request_invalid",
     "The AI request is invalid.",
 )
+SPEECH_CONFIGURATION_CHANGED = GatewayError(
+    409,
+    "ai_gateway_speech_configuration_changed",
+    "The speech configuration changed. Resolve a new configuration before synthesis.",
+)
 REQUEST_ALREADY_ACCEPTED = GatewayError(
     409,
     "ai_gateway_request_already_accepted",

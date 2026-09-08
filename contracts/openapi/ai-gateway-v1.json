@@ -189,9 +189,93 @@
         "title": "MediaAnalysisResponse",
         "type": "object"
       },
+      "SpeechCapabilities": {
+        "additionalProperties": false,
+        "properties": {
+          "configuration_id": {
+            "title": "Configuration Id",
+            "type": "string"
+          },
+          "instructions_semantics": {
+            "const": "best_effort",
+            "default": "best_effort",
+            "title": "Instructions Semantics",
+            "type": "string"
+          },
+          "max_input_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Input Bytes"
+          },
+          "max_input_characters": {
+            "default": 4096,
+            "title": "Max Input Characters",
+            "type": "integer"
+          },
+          "max_instructions_characters": {
+            "default": 1000,
+            "title": "Max Instructions Characters",
+            "type": "integer"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "voices": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Voices"
+          }
+        },
+        "required": [
+          "profile",
+          "configuration_id",
+          "provider",
+          "model",
+          "voices",
+          "max_input_bytes"
+        ],
+        "title": "SpeechCapabilities",
+        "type": "object"
+      },
       "SpeechSynthesisRequest": {
         "additionalProperties": false,
         "properties": {
+          "configuration_id": {
+            "anyOf": [
+              {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configuration Id"
+          },
           "input": {
             "maxLength": 4096,
             "minLength": 1,
@@ -475,6 +559,91 @@
           }
         },
         "summary": "Synthesize Speech",
+        "tags": [
+          "AI"
+        ]
+      }
+    },
+    "/ai/v1/audio/speech/capabilities": {
+      "get": {
+        "operationId": "speech_capabilities_ai_v1_audio_speech_capabilities_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "product",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z][a-z0-9_-]{1,63}$",
+              "title": "Product",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "profile",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z][a-z0-9_.-]{2,127}$",
+              "title": "Profile",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Dali-Caller",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Dali-Caller"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechCapabilities"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Speech Capabilities",
         "tags": [
           "AI"
         ]

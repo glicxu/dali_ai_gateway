@@ -91,6 +91,12 @@ are content-free and admission uses atomic bounded slots across replicas.
 
 ## Local setup
 
+The [Dali Audio technical spike](docs/dali_audio_technical_spike.md) uses Dali
+Chat to exercise stateless speech discovery, configured voice aliases,
+configuration checks, delivery instructions, and playback through the Gateway.
+It includes an isolated loopback demo with a synthetic tone fixture and optional
+live-provider trials.
+
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
