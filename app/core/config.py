@@ -231,6 +231,14 @@ DEFAULT_PROFILES: dict[str, dict[str, object]] = {
         "max_input_bytes": 16384,
         "voice_routes": {"neutral": "alloy", "warm": "coral"},
     },
+    "dalibible.study.standard": {
+        "capacity_pool": "dalibible",
+        "capability": "text_generation",
+        "provider": "openai",
+        "model": "gpt-5-mini",
+        "required_for_readiness": False,
+        "max_input_bytes": 65536,
+    },
     "scribe.transcription.live": {
         "capacity_pool": "scribe_realtime",
         "capability": "realtime_transcription",
@@ -336,6 +344,12 @@ DEFAULT_WORKLOAD_GRANTS: dict[str, dict[str, object]] = {
             "speech_synthesis",
         ],
     },
+    "dali_bible_server_ai": {
+        "enabled": False,
+        "products": ["dalibible"],
+        "profiles": ["dalibible.study.standard"],
+        "capabilities": ["text_generation"],
+    },
     "dali_scribe_server_ai": {
         "enabled": False,
         "products": ["scribe"],
@@ -371,7 +385,8 @@ class Settings(BaseSettings):
     gemini_credential_access_id: str = "gemini"
     service_tokens_json: SecretStr = SecretStr("{}")
     caller_limits_json: str = (
-        '{"dali_classroom_server":1,"dali_chat_server":2,"interpreter_server_ai":2,"dali_scribe_server_ai":2}'
+        '{"dali_classroom_server":1,"dali_chat_server":2,"interpreter_server_ai":2,'
+        '"dali_bible_server_ai":1,"dali_scribe_server_ai":2}'
     )
     model_profiles_json: str = "{}"
     policy_generation_id: str = "builtin-classroom-v1"
