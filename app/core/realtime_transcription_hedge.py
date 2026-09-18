@@ -5,6 +5,7 @@ import base64
 import binascii
 from collections import deque
 from collections.abc import Awaitable, Callable
+import logging
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -14,6 +15,7 @@ from app.providers.base import RealtimeEvent, RealtimeTranscriptionSession
 
 
 ProfileOpener = Callable[[str], Awaitable[RealtimeTranscriptionSession]]
+LOGGER = logging.getLogger("uvicorn.error")
 
 
 async def bridge_hedged_transcription(
@@ -36,6 +38,7 @@ async def bridge_hedged_transcription(
     committed_audio: list[str] = []
     commit_pending = False
     hedge_active = False
+    active_failed_during_commit = False
     client_task: asyncio.Task | None = None
     active_task: asyncio.Task | None = None
     standby_task: asyncio.Task | None = None
@@ -83,6 +86,7 @@ async def bridge_hedged_transcription(
     async def promote_standby() -> None:
         nonlocal active, active_profile, active_task
         nonlocal standby, standby_profile, standby_task, hedge_active
+        nonlocal active_failed_during_commit
         previous = active
         previous_profile = active_profile
         if active_task is not None:
@@ -95,6 +99,7 @@ async def bridge_hedged_transcription(
         standby_task = None
         standby_profile = previous_profile
         hedge_active = False
+        active_failed_during_commit = False
         await previous.close()
         await reset_standby()
 
@@ -102,6 +107,7 @@ async def bridge_hedged_transcription(
         """Abandon a stale commit while preserving the newer audio window."""
         nonlocal active, active_task, standby, standby_task
         nonlocal hedge_active, hedge_task, commit_pending, committed_audio
+        nonlocal active_failed_during_commit
         for task in (active_task, standby_task, hedge_task):
             if task is not None:
                 task.cancel()
@@ -123,6 +129,7 @@ async def bridge_hedged_transcription(
             await active.append(chunk)
         commit_pending = False
         hedge_active = False
+        active_failed_during_commit = False
         committed_audio = []
         await reset_standby()
 
@@ -170,7 +177,16 @@ async def bridge_hedged_transcription(
                 except Exception:
                     event = RealtimeEvent("error")
                 if event.type == "error":
+                    LOGGER.warning(
+                        "Realtime transcription provider error role=active "
+                        "profile=%s code=%s commit_pending=%s hedge_active=%s",
+                        active_profile,
+                        event.code or "unknown",
+                        commit_pending,
+                        hedge_active,
+                    )
                     if commit_pending:
+                        active_failed_during_commit = True
                         if not hedge_active:
                             try:
                                 await activate_hedge()
@@ -189,6 +205,7 @@ async def bridge_hedged_transcription(
                     await send_provider_event(event)
                     if event.type == "transcript.final" and commit_pending:
                         commit_pending = False
+                        active_failed_during_commit = False
                         committed_audio = []
                         if hedge_task is not None:
                             hedge_task.cancel()
@@ -206,8 +223,22 @@ async def bridge_hedged_transcription(
                 except Exception:
                     event = RealtimeEvent("error")
                 if event.type == "error":
-                    await websocket.send_json(_provider_error())
-                    return
+                    LOGGER.warning(
+                        "Realtime transcription provider error role=standby "
+                        "profile=%s code=%s active_failed=%s",
+                        standby_profile,
+                        event.code or "unknown",
+                        active_failed_during_commit,
+                    )
+                    if active_failed_during_commit:
+                        # Both routes for the same committed window failed.
+                        await websocket.send_json(_provider_error())
+                        return
+                    # A speculative hedge must never take down a still-viable
+                    # active route. Replace it for a later active failure and
+                    # continue waiting for the active result.
+                    hedge_active = False
+                    await reset_standby()
                 if hedge_active:
                     await send_provider_event(event)
                     if event.type == "transcript.final" and commit_pending:
@@ -246,6 +277,7 @@ async def bridge_hedged_transcription(
                         audio_bytes = 0
                         commit_pending = True
                         hedge_active = False
+                        active_failed_during_commit = False
                         await active.commit()
                         hedge_task = asyncio.create_task(
                             asyncio.sleep(hedge_delay_seconds)

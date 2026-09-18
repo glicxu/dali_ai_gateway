@@ -129,6 +129,54 @@ def test_healthy_primary_does_not_send_audio_to_standby() -> None:
     asyncio.run(scenario())
 
 
+def test_failed_speculative_standby_does_not_close_healthy_active_route() -> None:
+    async def scenario() -> None:
+        socket = _Socket()
+        primary = _Session()
+        failed_fallback = _Session()
+        replacement_fallback = _Session()
+        fallbacks = [failed_fallback, replacement_fallback]
+
+        async def open_profile(_profile: str) -> _Session:
+            return fallbacks.pop(0)
+
+        task = asyncio.create_task(
+            bridge_hedged_transcription(
+                socket,  # type: ignore[arg-type]
+                primary,
+                primary_profile="primary",
+                fallback_profile="fallback",
+                open_profile=open_profile,  # type: ignore[arg-type]
+                hedge_delay_seconds=0.01,
+                max_buffer_bytes=64,
+            )
+        )
+        await socket.incoming.put({"type": "audio.append", "audio": "AQI="})
+        await socket.incoming.put({"type": "audio.commit"})
+
+        # The delayed hedge starts and fails, but the active provider is still
+        # allowed to finish the same committed window.
+        await asyncio.sleep(0.03)
+        await failed_fallback.events.put(
+            RealtimeEvent("error", code="provider_realtime_error")
+        )
+        await asyncio.sleep(0.01)
+        await primary.events.put(
+            RealtimeEvent("transcript.final", text="Primary recovered.")
+        )
+        await _wait_for_final(socket)
+        await socket.incoming.put({"type": "session.stop"})
+        await task
+
+        assert not any(item.get("type") == "error" for item in socket.sent)
+        assert [item.get("text") for item in socket.sent] == [
+            "Primary recovered."
+        ]
+        assert failed_fallback.closed is True
+
+    asyncio.run(scenario())
+
+
 def test_new_commit_replaces_stale_hedge_without_closing_client() -> None:
     async def scenario() -> None:
         socket = _Socket()
