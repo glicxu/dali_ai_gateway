@@ -319,6 +319,33 @@
         "title": "SpeechSynthesisRequest",
         "type": "object"
       },
+      "StructuredOutput": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "title": "Name",
+            "type": "string"
+          },
+          "schema": {
+            "additionalProperties": true,
+            "title": "Schema",
+            "type": "object"
+          },
+          "strict": {
+            "const": true,
+            "default": true,
+            "title": "Strict",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "schema"
+        ],
+        "title": "StructuredOutput",
+        "type": "object"
+      },
       "TextGenerationRequest": {
         "additionalProperties": false,
         "properties": {
@@ -347,10 +374,21 @@
             "default": "text",
             "enum": [
               "text",
-              "json"
+              "json",
+              "json_schema"
             ],
             "title": "Response Format",
             "type": "string"
+          },
+          "structured_output": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StructuredOutput"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "system_instruction": {
             "maxLength": 20000,

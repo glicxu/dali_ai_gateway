@@ -56,6 +56,7 @@ class TextProvider(Protocol):
         input_text: str,
         response_format: str,
         temperature: float,
+        structured_output: dict | None = None,
     ) -> TextResult: ...
 
     async def close(self) -> None: ...

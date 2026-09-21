@@ -354,6 +354,12 @@ class GatewayService:
         ):
             raise REQUEST_INVALID
         provider = self.registry.text_provider(raw_provider)
+        schema_options = {}
+        if request.structured_output is not None:
+            if (profile.provider != "openai"
+                or "json_schema" not in (profile.supported_outputs or ())):
+                raise REQUEST_INVALID
+            schema_options["structured_output"] = request.structured_output.model_dump(by_alias=True)
         route_id = f"{profile.provider}.{profile.model}"
         try:
             async with self.admission.lease(
@@ -373,6 +379,7 @@ class GatewayService:
                         input_text=request.input,
                         response_format=request.response_format,
                         temperature=request.temperature,
+                        **schema_options,
                     )
         except GatewayError:
             raise

@@ -6,10 +6,22 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.realtime_policy import RealtimeRoutePolicy
+from app.core.structured_output import validate_schema
 
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class StructuredOutput(StrictModel):
+    name: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    schema_definition: dict = Field(alias="schema")
+    strict: Literal[True] = True
+
+    @field_validator("schema_definition")
+    @classmethod
+    def bounded_schema(cls, value: dict) -> dict:
+        return validate_schema(value)
 
 
 class TextGenerationRequest(StrictModel):
@@ -18,8 +30,15 @@ class TextGenerationRequest(StrictModel):
     profile: str = Field(pattern=r"^[a-z][a-z0-9_.-]{2,127}$")
     system_instruction: str = Field(min_length=1, max_length=20_000)
     input: str = Field(min_length=1, max_length=200_000)
-    response_format: Literal["text", "json"] = "text"
+    response_format: Literal["text", "json", "json_schema"] = "text"
+    structured_output: StructuredOutput | None = None
     temperature: float = Field(default=0, ge=0, le=2)
+
+    @model_validator(mode="after")
+    def schema_format_matches(self):
+        if (self.response_format == "json_schema") != (self.structured_output is not None):
+            raise ValueError("structured output requires json_schema format")
+        return self
 
 
 class UsageMeasurement(StrictModel):

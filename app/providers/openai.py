@@ -63,7 +63,10 @@ class OpenAIProvider:
         input_text: str,
         response_format: str,
         temperature: float,
+        structured_output: dict | None = None,
     ) -> TextResult:
+        if (response_format == "json_schema") != (structured_output is not None):
+            raise REQUEST_INVALID
         payload: dict[str, object] = {
             "model": model,
             "messages": [
@@ -78,9 +81,16 @@ class OpenAIProvider:
             payload["temperature"] = temperature
         if response_format == "json":
             payload["response_format"] = {"type": "json_object"}
+        elif response_format == "json_schema":
+            payload["response_format"] = {"type": "json_schema", "json_schema": structured_output}
         value = await self._post_json("/chat/completions", payload)
         try:
             output = value["choices"][0]["message"]["content"]
+            if structured_output is not None and (
+                value["choices"][0].get("finish_reason") != "stop"
+                or value["choices"][0]["message"].get("refusal")
+            ):
+                raise PROVIDER_UNAVAILABLE
         except (KeyError, IndexError, TypeError) as error:
             raise PROVIDER_UNAVAILABLE from error
         if not isinstance(output, str) or not output.strip():
