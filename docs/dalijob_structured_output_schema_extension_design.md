@@ -1,9 +1,23 @@
 # DaliJob structured-output schema extension
 
-Status: Approved for implementation
+Status: Implemented and accepted on US3
 Date: 2026-09-21
 Owners: Dali AI Gateway and DaliJob
 First consumer: `dali_job_ai`
+
+## Implementation record
+
+- Gateway commit `f4dd43d` implements the bounded schema subset and durable
+  DaliJob extraction-profile registration.
+- DaliJob commits `185a3e9` and `c837b27` flatten and preserve the supported
+  constraints and explicitly identify eligible section-coverage references in
+  extraction and repair requests.
+- The 2026-09-21 US3 acceptance selected five Amazon reviews, created five Job
+  Profiles, published all five to the authenticated catalog, and had zero
+  failures.
+- Scheduled profile extraction was enabled afterward with the existing global
+  publication limit of five. The pre-enable environment file was retained as a
+  timestamped rollback backup.
 
 ## Decision summary
 
