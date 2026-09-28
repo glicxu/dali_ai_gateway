@@ -1108,7 +1108,9 @@ def test_interpreter_realtime_uses_gemini_when_openai_cannot_open() -> None:
     grant = copy.deepcopy(DEFAULT_WORKLOAD_GRANTS["interpreter_server_ai"])
     grant["enabled"] = True
     settings = Settings(
-        service_tokens_json=SecretStr('{"interpreter_server_ai":"interprete-test-token"}'),
+        service_tokens_json=SecretStr(
+            '{"interpreter_server_ai":"interprete-test-token"}'
+        ),
         workload_grants_json=json.dumps({"interpreter_server_ai": grant}),
         caller_limits_json='{"interpreter_server_ai":1}',
         legacy_auth_workload_ids_json='["interpreter_server_ai"]',
@@ -1128,13 +1130,17 @@ def test_interpreter_realtime_uses_gemini_when_openai_cannot_open() -> None:
         with client.websocket_connect(
             "/ai/v2/realtime/translations", headers=headers
         ) as socket:
-            socket.send_json({
-                "type": "session.start", "request_id": str(uuid4()),
-                "product": "interprete",
-                "profile": "interprete.translation.realtime",
-                "fallback_profile": "interprete.translation.realtime.gemini",
-                "policy": "windowed_failover", "target_language": "es",
-            })
+            socket.send_json(
+                {
+                    "type": "session.start",
+                    "request_id": str(uuid4()),
+                    "product": "interprete",
+                    "profile": "interprete.translation.realtime",
+                    "fallback_profile": "interprete.translation.realtime.gemini",
+                    "policy": "windowed_failover",
+                    "target_language": "es",
+                }
+            )
             ready = socket.receive_json()
             assert ready["type"] == "session.ready"
             assert ready["fallback_reason"] == "provider_unavailable"
@@ -1145,7 +1151,9 @@ def test_interpreter_realtime_uses_gemini_when_openai_cannot_open() -> None:
     assert sink.measurements[0].route_id == "gemini.gemini-3.5-live-translate-preview"
 
 
-def test_interpreter_realtime_does_not_fallback_for_missing_provider_configuration() -> None:
+def test_interpreter_realtime_does_not_fallback_for_missing_provider_configuration() -> (
+    None
+):
     class UnconfiguredOpenAi(FakeProvider):
         async def open_realtime_translation(self, **kwargs):
             raise PROVIDER_NOT_CONFIGURED
@@ -1154,7 +1162,9 @@ def test_interpreter_realtime_does_not_fallback_for_missing_provider_configurati
     grant = copy.deepcopy(DEFAULT_WORKLOAD_GRANTS["interpreter_server_ai"])
     grant["enabled"] = True
     settings = Settings(
-        service_tokens_json=SecretStr('{"interpreter_server_ai":"interprete-test-token"}'),
+        service_tokens_json=SecretStr(
+            '{"interpreter_server_ai":"interprete-test-token"}'
+        ),
         workload_grants_json=json.dumps({"interpreter_server_ai": grant}),
         caller_limits_json='{"interpreter_server_ai":1}',
         legacy_auth_workload_ids_json='["interpreter_server_ai"]',
@@ -1170,13 +1180,17 @@ def test_interpreter_realtime_does_not_fallback_for_missing_provider_configurati
         with client.websocket_connect(
             "/ai/v2/realtime/translations", headers=headers
         ) as socket:
-            socket.send_json({
-                "type": "session.start", "request_id": str(uuid4()),
-                "product": "interprete",
-                "profile": "interprete.translation.realtime",
-                "fallback_profile": "interprete.translation.realtime.gemini",
-                "policy": "windowed_failover", "target_language": "es",
-            })
+            socket.send_json(
+                {
+                    "type": "session.start",
+                    "request_id": str(uuid4()),
+                    "product": "interprete",
+                    "profile": "interprete.translation.realtime",
+                    "fallback_profile": "interprete.translation.realtime.gemini",
+                    "policy": "windowed_failover",
+                    "target_language": "es",
+                }
+            )
             assert socket.receive_json()["error"]["code"] == (
                 "ai_gateway_provider_not_configured"
             )
@@ -1199,7 +1213,9 @@ def test_interpreter_realtime_does_not_fallback_for_provider_request_error() -> 
     grant = copy.deepcopy(DEFAULT_WORKLOAD_GRANTS["interpreter_server_ai"])
     grant["enabled"] = True
     settings = Settings(
-        service_tokens_json=SecretStr('{"interpreter_server_ai":"interprete-test-token"}'),
+        service_tokens_json=SecretStr(
+            '{"interpreter_server_ai":"interprete-test-token"}'
+        ),
         workload_grants_json=json.dumps({"interpreter_server_ai": grant}),
         caller_limits_json='{"interpreter_server_ai":1}',
         legacy_auth_workload_ids_json='["interpreter_server_ai"]',
@@ -1213,13 +1229,17 @@ def test_interpreter_realtime_does_not_fallback_for_provider_request_error() -> 
         with client.websocket_connect(
             "/ai/v2/realtime/translations", headers=headers
         ) as socket:
-            socket.send_json({
-                "type": "session.start", "request_id": str(uuid4()),
-                "product": "interprete",
-                "profile": "interprete.translation.realtime",
-                "fallback_profile": "interprete.translation.realtime.gemini",
-                "policy": "windowed_failover", "target_language": "es",
-            })
+            socket.send_json(
+                {
+                    "type": "session.start",
+                    "request_id": str(uuid4()),
+                    "product": "interprete",
+                    "profile": "interprete.translation.realtime",
+                    "fallback_profile": "interprete.translation.realtime.gemini",
+                    "policy": "windowed_failover",
+                    "target_language": "es",
+                }
+            )
             assert socket.receive_json()["type"] == "session.ready"
             socket.send_json({"type": "audio.append", "sequence": 1, "audio": "AQI="})
             events = [socket.receive_json() for _ in range(4)]

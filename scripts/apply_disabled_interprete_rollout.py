@@ -83,9 +83,7 @@ def main() -> int:
     limits.setdefault("interprete", 2)
     limits.setdefault("interprete_realtime", 1)
 
-    workload_ids = json.loads(
-        values.get("AI_GATEWAY_PLATFORM_WORKLOAD_IDS_JSON", "[]")
-    )
+    workload_ids = json.loads(values.get("AI_GATEWAY_PLATFORM_WORKLOAD_IDS_JSON", "[]"))
     if not isinstance(workload_ids, list) or not all(
         isinstance(item, str) for item in workload_ids
     ):
@@ -106,7 +104,9 @@ def main() -> int:
     backup = env_file.with_name(env_file.name + ".bak." + args.backup_suffix)
     shutil.copy2(env_file, backup)
     stat = env_file.stat()
-    fd, temporary_name = tempfile.mkstemp(prefix=env_file.name + ".", dir=env_file.parent)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=env_file.name + ".", dir=env_file.parent
+    )
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
             handle.write(updated)
@@ -119,7 +119,9 @@ def main() -> int:
         if os.path.exists(temporary_name):
             os.unlink(temporary_name)
 
-    print(f"updated={env_file} backup={backup} workload=interpreter_server_ai enabled=false")
+    print(
+        f"updated={env_file} backup={backup} workload=interpreter_server_ai enabled=false"
+    )
     return 0
 
 

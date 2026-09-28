@@ -236,8 +236,14 @@ def test_interprete_has_an_independent_disabled_workload_and_profiles() -> None:
         generation.profiles["interprete.translation.realtime.openai"].provider
         == "openai"
     )
-    assert generation.profiles["interprete.transcription.realtime.gemini"].provider == "gemini"
-    assert generation.profiles["interprete.translation.realtime.gemini"].provider == "gemini"
+    assert (
+        generation.profiles["interprete.transcription.realtime.gemini"].provider
+        == "gemini"
+    )
+    assert (
+        generation.profiles["interprete.translation.realtime.gemini"].provider
+        == "gemini"
+    )
 
 
 def test_admission_lease_ttl_is_explicitly_bounded() -> None:
@@ -297,9 +303,7 @@ def test_reviewed_aws_us2_generation_enables_only_two_product_workloads() -> Non
         "dali_chat_server",
     }
     assert values["AI_GATEWAY_PLATFORM_WORKLOAD_REQUIRED_SCOPE"] == "ai:execute"
-    assert "interpreter_server_ai" in values[
-        "AI_GATEWAY_PLATFORM_WORKLOAD_IDS_JSON"
-    ]
+    assert "interpreter_server_ai" in values["AI_GATEWAY_PLATFORM_WORKLOAD_IDS_JSON"]
     limits = json.loads(values["AI_GATEWAY_CALLER_LIMITS_JSON"])
     assert limits["interprete_realtime"] == 1
     assert generation.grants["dali_classroom_server"].products == frozenset(

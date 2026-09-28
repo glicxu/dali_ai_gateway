@@ -82,7 +82,10 @@ class OpenAIProvider:
         if response_format == "json":
             payload["response_format"] = {"type": "json_object"}
         elif response_format == "json_schema":
-            payload["response_format"] = {"type": "json_schema", "json_schema": structured_output}
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": structured_output,
+            }
         value = await self._post_json("/chat/completions", payload)
         try:
             output = value["choices"][0]["message"]["content"]

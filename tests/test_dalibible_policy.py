@@ -51,6 +51,7 @@ def test_dalibible_grant_cannot_cross_product_or_profile_namespace(
 ) -> None:
     settings = Settings()
     grants = settings.policy_generation().grants
-    assert product not in grants["dali_bible_server_ai"].products or profile not in grants[
-        "dali_bible_server_ai"
-    ].profiles
+    assert (
+        product not in grants["dali_bible_server_ai"].products
+        or profile not in grants["dali_bible_server_ai"].profiles
+    )

@@ -51,9 +51,12 @@ def test_activation_is_additive_and_preserves_rollback_file(tmp_path: Path) -> N
         "interpreter_server_ai"
     ].get("enabled", False)
     assert grants["interpreter_server_ai"]["enabled"] is True
-    assert grants["dali_classroom_server"] == json.loads(
-        before["AI_GATEWAY_WORKLOAD_GRANTS_JSON"]
-    )["dali_classroom_server"]
+    assert (
+        grants["dali_classroom_server"]
+        == json.loads(before["AI_GATEWAY_WORKLOAD_GRANTS_JSON"])[
+            "dali_classroom_server"
+        ]
+    )
     assert after["AI_GATEWAY_PLATFORM_WORKLOAD_AUTH_ENABLED"] == "true"
     assert json.loads(after["AI_GATEWAY_PLATFORM_WORKLOAD_IDS_JSON"]) == [
         "interpreter_server_ai"
@@ -110,8 +113,9 @@ def test_activation_adds_interpreter_realtime_fallback_to_previous_boundary(
         backup_suffix="fallback",
     )
 
-    activated = json.loads(
-        _read(env_file)["AI_GATEWAY_WORKLOAD_GRANTS_JSON"]
-    )["interpreter_server_ai"]
+    activated = json.loads(_read(env_file)["AI_GATEWAY_WORKLOAD_GRANTS_JSON"])[
+        "interpreter_server_ai"
+    ]
+    assert "interprete.translation.realtime.openai" in activated["profiles"]
     assert "interprete.transcription.realtime.gemini" in activated["profiles"]
     assert "interprete.translation.realtime.gemini" in activated["profiles"]

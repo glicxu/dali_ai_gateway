@@ -36,7 +36,9 @@ class TextGenerationRequest(StrictModel):
 
     @model_validator(mode="after")
     def schema_format_matches(self):
-        if (self.response_format == "json_schema") != (self.structured_output is not None):
+        if (self.response_format == "json_schema") != (
+            self.structured_output is not None
+        ):
             raise ValueError("structured output requires json_schema format")
         return self
 

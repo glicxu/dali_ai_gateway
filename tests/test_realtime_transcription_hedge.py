@@ -169,9 +169,7 @@ def test_failed_speculative_standby_does_not_close_healthy_active_route() -> Non
         await task
 
         assert not any(item.get("type") == "error" for item in socket.sent)
-        assert [item.get("text") for item in socket.sent] == [
-            "Primary recovered."
-        ]
+        assert [item.get("text") for item in socket.sent] == ["Primary recovered."]
         assert failed_fallback.closed is True
 
     asyncio.run(scenario())
@@ -216,8 +214,6 @@ def test_new_commit_replaces_stale_hedge_without_closing_client() -> None:
         assert first_fallback.closed is True
         assert replacement_primary.appended == ["AwQ="]
         assert replacement_primary.committed == 1
-        assert [item["text"] for item in socket.sent] == [
-            "Recovered transcript."
-        ]
+        assert [item["text"] for item in socket.sent] == ["Recovered transcript."]
 
     asyncio.run(scenario())
