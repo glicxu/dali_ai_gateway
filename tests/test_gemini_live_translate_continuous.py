@@ -84,7 +84,9 @@ def test_continuous_translate_commit_finalizes_and_drops_digital_silence() -> No
                             "parts": [
                                 {
                                     "inlineData": {
-                                        "data": base64.b64encode(b"\x00" * 4800).decode(),
+                                        "data": base64.b64encode(
+                                            b"\x00" * 4800
+                                        ).decode(),
                                         "mimeType": "audio/pcm;rate=24000",
                                     }
                                 }

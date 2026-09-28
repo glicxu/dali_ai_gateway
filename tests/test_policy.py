@@ -295,9 +295,7 @@ def test_reviewed_aws_us2_generation_enables_only_two_product_workloads() -> Non
         "dali_chat_server",
     }
     assert values["AI_GATEWAY_PLATFORM_WORKLOAD_REQUIRED_SCOPE"] == "ai:execute"
-    assert "interpreter_server_ai" in values[
-        "AI_GATEWAY_PLATFORM_WORKLOAD_IDS_JSON"
-    ]
+    assert "interpreter_server_ai" in values["AI_GATEWAY_PLATFORM_WORKLOAD_IDS_JSON"]
     limits = json.loads(values["AI_GATEWAY_CALLER_LIMITS_JSON"])
     assert limits["interprete_realtime"] == 1
     assert generation.grants["dali_classroom_server"].products == frozenset(

@@ -1,4 +1,5 @@
 """Small, bounded declarative schema subset; never resolves references."""
+
 import json
 import math
 
@@ -33,7 +34,10 @@ def validate_schema(value: dict) -> dict:
             if root or set(node) != {"anyOf"}:
                 raise ValueError("unsupported schema union")
             branches = node["anyOf"]
-            if not isinstance(branches, list) or not 2 <= len(branches) <= _MAX_UNION_BRANCHES:
+            if (
+                not isinstance(branches, list)
+                or not 2 <= len(branches) <= _MAX_UNION_BRANCHES
+            ):
                 raise ValueError("schema union exceeds branch limits")
             for branch in branches:
                 visit(branch, depth + 1)
@@ -58,7 +62,9 @@ def validate_schema(value: dict) -> dict:
                 or set(required) != set(properties)
                 or node.get("additionalProperties") is not False
             ):
-                raise ValueError("objects must require every property and forbid extras")
+                raise ValueError(
+                    "objects must require every property and forbid extras"
+                )
             for name, child in properties.items():
                 if not isinstance(name, str) or not 1 <= len(name) <= 128:
                     raise ValueError("invalid property name")
@@ -90,14 +96,19 @@ def validate_schema(value: dict) -> dict:
             canonical_values: set[str] = set()
             for item in enum:
                 _validate_scalar(item, kinds)
-                canonical = json.dumps(item, ensure_ascii=True, allow_nan=False, sort_keys=True)
+                canonical = json.dumps(
+                    item, ensure_ascii=True, allow_nan=False, sort_keys=True
+                )
                 if canonical in canonical_values:
                     raise ValueError("schema enum values must be unique")
                 canonical_values.add(canonical)
                 enum_count += 1
                 if isinstance(item, str):
                     enum_string_bytes += len(item.encode("utf-8"))
-            if enum_count > _MAX_TOTAL_ENUM_VALUES or enum_string_bytes > _MAX_ENUM_STRING_BYTES:
+            if (
+                enum_count > _MAX_TOTAL_ENUM_VALUES
+                or enum_string_bytes > _MAX_ENUM_STRING_BYTES
+            ):
                 raise ValueError("schema enum exceeds aggregate limits")
 
         if "const" in node:
@@ -112,7 +123,10 @@ def validate_schema(value: dict) -> dict:
 
     if not isinstance(value, dict) or value.get("type") != "object" or "anyOf" in value:
         raise ValueError("schema root must be an object")
-    if len(json.dumps(value, ensure_ascii=True, allow_nan=False).encode()) > _MAX_SCHEMA_BYTES:
+    if (
+        len(json.dumps(value, ensure_ascii=True, allow_nan=False).encode())
+        > _MAX_SCHEMA_BYTES
+    ):
         raise ValueError("schema exceeds size limit")
     visit(value, 1, root=True)
     return value
@@ -157,7 +171,9 @@ def _validate_integer_bounds(node: dict, minimum_name: str, maximum_name: str) -
     minimum, maximum = node.get(minimum_name), node.get(maximum_name)
     for value in (minimum, maximum):
         if value is not None and (
-            isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= _MAX_BOUND
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 0 <= value <= _MAX_BOUND
         ):
             raise ValueError("invalid schema integer bound")
     if minimum is not None and maximum is not None and minimum > maximum:
@@ -165,7 +181,11 @@ def _validate_integer_bounds(node: dict, minimum_name: str, maximum_name: str) -
 
 
 def _validate_number_bounds(node: dict) -> None:
-    minimum, maximum, multiple = node.get("minimum"), node.get("maximum"), node.get("multipleOf")
+    minimum, maximum, multiple = (
+        node.get("minimum"),
+        node.get("maximum"),
+        node.get("multipleOf"),
+    )
     for value in (minimum, maximum, multiple):
         if value is not None and (
             isinstance(value, bool)

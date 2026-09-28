@@ -342,6 +342,7 @@ def router_for(container: Container) -> APIRouter:
                 if start.fallback_profile is None:
                     await _bridge(websocket, session)
                 else:
+
                     async def open_profile(profile_name: str):
                         request = start.model_copy(update={"profile": profile_name})
                         return await container.service.open_realtime(

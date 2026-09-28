@@ -63,18 +63,18 @@ def configure(
     values = _values(lines)
 
     profiles = json.loads(values.get("AI_GATEWAY_MODEL_PROFILES_JSON", "{}"))
-    grants = json.loads(values["AI_GATEWAY_WORKLOAD_GRANTS_JSON"]) if (
-        "AI_GATEWAY_WORKLOAD_GRANTS_JSON" in values
-    ) else copy.deepcopy(DEFAULT_WORKLOAD_GRANTS)
+    grants = (
+        json.loads(values["AI_GATEWAY_WORKLOAD_GRANTS_JSON"])
+        if ("AI_GATEWAY_WORKLOAD_GRANTS_JSON" in values)
+        else copy.deepcopy(DEFAULT_WORKLOAD_GRANTS)
+    )
     limits = json.loads(
         values.get(
             "AI_GATEWAY_CALLER_LIMITS_JSON",
             str(Settings.model_fields["caller_limits_json"].default),
         )
     )
-    platform_ids = json.loads(
-        values.get("AI_GATEWAY_PLATFORM_WORKLOAD_IDS_JSON", "[]")
-    )
+    platform_ids = json.loads(values.get("AI_GATEWAY_PLATFORM_WORKLOAD_IDS_JSON", "[]"))
     if not isinstance(profiles, dict) or not isinstance(grants, dict):
         raise ValueError("Gateway profile or grant policy is malformed")
     if not isinstance(limits, dict) or not isinstance(platform_ids, list):
@@ -112,7 +112,9 @@ def configure(
     for profile_id, expected_profile in expected_profiles.items():
         existing = profiles.get(profile_id)
         if existing is not None and existing != expected_profile:
-            raise ValueError(f"existing {profile_id} policy differs from reviewed policy")
+            raise ValueError(
+                f"existing {profile_id} policy differs from reviewed policy"
+            )
         profiles[profile_id] = expected_profile
     existing_grant = grants.get(WORKLOAD_ID)
     previous_grant = {

@@ -612,10 +612,7 @@ class GeminiRealtimeSession:
                     if (
                         isinstance(audio, str)
                         and audio
-                        and (
-                            not self._translation_committed
-                            or _has_pcm_signal(audio)
-                        )
+                        and (not self._translation_committed or _has_pcm_signal(audio))
                     ):
                         self._translated_audio_emitted = True
                         await self._events.put(

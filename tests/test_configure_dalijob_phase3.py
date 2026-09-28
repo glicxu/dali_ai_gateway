@@ -9,7 +9,7 @@ def test_configure_preserves_existing_policy_and_adds_bounded_dalijob(tmp_path):
     env_file = tmp_path / "gateway.env"
     env_file.write_text(
         "AI_GATEWAY_MODEL_PROFILES_JSON='{}'\n"
-        "AI_GATEWAY_WORKLOAD_GRANTS_JSON='{\"existing\":{\"products\":[\"x\"]}}'\n"
+        'AI_GATEWAY_WORKLOAD_GRANTS_JSON=\'{"existing":{"products":["x"]}}\'\n'
         "AI_GATEWAY_CALLER_LIMITS_JSON='{\"existing\":2}'\n",
         encoding="utf-8",
     )
@@ -30,7 +30,9 @@ def test_configure_preserves_existing_policy_and_adds_bounded_dalijob(tmp_path):
     assert profiles["dalijob.job_parse"]["capacity_pool"] == "dalijob-background"
     assert profiles["dalijob.job_parse"]["supported_outputs"] == ["json_schema"]
     assert profiles["dalijob.job.extract"]["supported_outputs"] == ["json_schema"]
-    assert profiles["dalijob.job.extract.repair"]["supported_outputs"] == ["json_schema"]
+    assert profiles["dalijob.job.extract.repair"]["supported_outputs"] == [
+        "json_schema"
+    ]
     assert set(MODEL_PROFILE_IDS).issubset(profiles)
     assert profiles["dalijob.candidate.extract"]["supported_outputs"] == ["json"]
     assert profiles["dalijob.qualification.assess"]["max_input_bytes"] == 131072
@@ -53,7 +55,7 @@ def test_configure_preserves_existing_policy_and_adds_bounded_dalijob(tmp_path):
 def test_configure_refuses_policy_drift(tmp_path):
     env_file = tmp_path / "gateway.env"
     env_file.write_text(
-        "AI_GATEWAY_MODEL_PROFILES_JSON='{\"dalijob.job_parse\":{\"model\":\"other\"}}'\n",
+        'AI_GATEWAY_MODEL_PROFILES_JSON=\'{"dalijob.job_parse":{"model":"other"}}\'\n',
         encoding="utf-8",
     )
 
