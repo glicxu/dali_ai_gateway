@@ -104,9 +104,7 @@ def activate(
         raise ValueError("Interpreter workload capability boundary changed")
     grant["enabled"] = True
 
-    platform_ids = json.loads(
-        values.get("AI_GATEWAY_PLATFORM_WORKLOAD_IDS_JSON", "[]")
-    )
+    platform_ids = json.loads(values.get("AI_GATEWAY_PLATFORM_WORKLOAD_IDS_JSON", "[]"))
     if not isinstance(platform_ids, list) or any(
         not isinstance(item, str) for item in platform_ids
     ):
