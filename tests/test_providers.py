@@ -74,7 +74,7 @@ def test_openai_text_batch_and_realtime_protocols() -> None:
         )
         assert transcribed.text == "Transcript."
         realtime = await provider.open_realtime(
-            model="gpt-live-transcribe",
+            model="gpt-4o-mini-transcribe",
             source_language="en",
             terminology_prompt="Biology",
             terminology_keywords=("ATP",),
@@ -86,10 +86,15 @@ def test_openai_text_batch_and_realtime_protocols() -> None:
         assert update["type"] == "session.update"
         audio_input = update["session"]["audio"]["input"]
         assert audio_input["format"] == {"type": "audio/pcm", "rate": 24000}
-        assert audio_input["turn_detection"] is None
+        assert audio_input["turn_detection"] == {
+            "type": "server_vad",
+            "threshold": 0.5,
+            "prefix_padding_ms": 300,
+            "silence_duration_ms": 500,
+        }
         transcription = audio_input["transcription"]
         assert transcription == {
-            "model": "gpt-live-transcribe",
+            "model": "gpt-4o-mini-transcribe",
             "language": "en",
             "prompt": "Biology\nATP",
         }
@@ -548,9 +553,17 @@ def test_openai_realtime_translation_protocol() -> None:
         socket = _FakeSocket(
             [
                 {
+                    "type": "session.input_transcript.delta",
+                    "delta": "Hello",
+                },
+                {
+                    "type": "session.input_transcript.completed",
+                    "transcript": "Hello there.",
+                    "item_id": "source-1",
+                },
+                {
                     "type": "session.output_transcript.delta",
                     "delta": "Guten",
-                    "item_id": "translation-1",
                 },
                 {
                     "type": "session.output_transcript.completed",
@@ -587,6 +600,9 @@ def test_openai_realtime_translation_protocol() -> None:
             target_language="de-DE",
             instructions="Translate faithfully.",
             audio_sample_rate_hz=24000,
+            outputs=frozenset(
+                {"source_transcript", "target_transcript", "translated_audio"}
+            ),
         )
         assert "/v1/realtime/translations" in str(connection["url"])
         assert "model=gpt-realtime-translate" in str(connection["url"])
@@ -596,7 +612,16 @@ def test_openai_realtime_translation_protocol() -> None:
                 "audio": {"output": {"language": "de"}},
             },
         }
-        assert (await realtime.next_event()).type == "translation.delta"
+        source_delta = await realtime.next_event()
+        assert source_delta.type == "transcript.delta"
+        assert source_delta.text == "Hello"
+        assert source_delta.item_id == "source-stream"
+        source_final = await realtime.next_event()
+        assert source_final.type == "transcript.final"
+        assert source_final.text == "Hello there."
+        translation_delta = await realtime.next_event()
+        assert translation_delta.type == "translation.delta"
+        assert translation_delta.item_id == "translation-stream"
         assert (await realtime.next_event()).text == "Guten Tag."
         audio = await realtime.next_event()
         assert audio.type == "translation.audio.delta"

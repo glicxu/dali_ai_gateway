@@ -90,9 +90,11 @@ def test_activation_adds_interpreter_realtime_fallback_to_previous_boundary(
     _env(env_file)
     values = _read(env_file)
     grants = json.loads(values["AI_GATEWAY_WORKLOAD_GRANTS_JSON"])
-    grants["interpreter_server_ai"]["profiles"].remove(
-        "interprete.translation.realtime.openai"
-    )
+    for profile in (
+        "interprete.transcription.realtime.gemini",
+        "interprete.translation.realtime.gemini",
+    ):
+        grants["interpreter_server_ai"]["profiles"].remove(profile)
     env_file.write_text(
         env_file.read_text(encoding="utf-8").replace(
             f"'{values['AI_GATEWAY_WORKLOAD_GRANTS_JSON']}'",
@@ -111,4 +113,5 @@ def test_activation_adds_interpreter_realtime_fallback_to_previous_boundary(
     activated = json.loads(
         _read(env_file)["AI_GATEWAY_WORKLOAD_GRANTS_JSON"]
     )["interpreter_server_ai"]
-    assert "interprete.translation.realtime.openai" in activated["profiles"]
+    assert "interprete.transcription.realtime.gemini" in activated["profiles"]
+    assert "interprete.translation.realtime.gemini" in activated["profiles"]

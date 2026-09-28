@@ -483,11 +483,13 @@ def router_for(container: Container) -> APIRouter:
                     "fallback_count": 0,
                     "rotation_count": 0,
                     "delivered": False,
+                    "selected_profile": start.profile,
                 }
 
                 async def open_profile(_profile: str):
                     return await container.service.open_realtime(
-                        caller=caller, request=start
+                        caller=caller,
+                        request=start.model_copy(update={"profile": _profile}),
                     )
 
                 async def deliver_usage() -> None:
@@ -501,7 +503,7 @@ def router_for(container: Container) -> APIRouter:
                         request_id=start.request_id,
                         caller=caller,
                         request=start,
-                        selected_profile=start.profile,
+                        selected_profile=str(usage_state["selected_profile"]),
                         started_at=usage_state["started_at"],
                         finished_at=finished_at,
                         disposition=usage_state["disposition"],
@@ -511,25 +513,46 @@ def router_for(container: Container) -> APIRouter:
                         source_audio_accepted_bytes=int(
                             usage_state["source_audio_accepted_bytes"]
                         ),
-                        fallback_count=0,
+                        fallback_count=int(usage_state["fallback_count"]),
                         rotation_count=int(usage_state["rotation_count"]),
                         capability="realtime_transcription",
                     )
                     usage_state["delivered"] = True
 
-                session = await open_profile(start.profile)
+                initial_profile = start.profile
+                try:
+                    session = await open_profile(initial_profile)
+                except GatewayError as error:
+                    if (
+                        start.fallback_profile is None
+                        or error.code != "ai_gateway_provider_unavailable"
+                    ):
+                        raise
+                    initial_profile = start.fallback_profile
+                    session = await open_profile(initial_profile)
+                    usage_state["fallback_count"] = 1
+                    usage_state["selected_profile"] = initial_profile
                 session_ref[0] = session
                 limits = container.service.realtime_limits(
                     caller=caller,
                     request=start,
-                    profile_names=(start.profile,),
+                    profile_names=tuple(
+                        name for name in (start.profile, start.fallback_profile)
+                        if name is not None
+                    ),
                     capability="realtime_transcription",
                 )
                 await _bridge_v2(
                     websocket,
                     session,
                     request_id=start.request_id,
-                    profile=start.profile,
+                    profile=initial_profile,
+                    initial_fallback_reason=(
+                        "provider_unavailable"
+                        if initial_profile != start.profile
+                        else None
+                    ),
+                    fallback_profile=start.fallback_profile,
                     open_profile=open_profile,
                     audio_sample_rate_hz=start.audio_sample_rate_hz,
                     outputs=["source_transcript"],
@@ -678,7 +701,20 @@ def router_for(container: Container) -> APIRouter:
                         caller=caller, request=request, profile_name=profile_name
                     )
 
-                session = await open_profile(start.profile)
+                initial_profile = start.profile
+                try:
+                    session = await open_profile(initial_profile)
+                except GatewayError as error:
+                    if (
+                        start.fallback_profile is None
+                        or error.code != "ai_gateway_provider_unavailable"
+                    ):
+                        raise
+                    await record_route_failure(initial_profile)
+                    initial_profile = start.fallback_profile
+                    session = await open_profile(initial_profile)
+                    usage_state["selected_profile"] = initial_profile
+                    usage_state["fallback_count"] = 1
                 session_ref[0] = session
                 limit_profiles = tuple(
                     name
@@ -700,7 +736,12 @@ def router_for(container: Container) -> APIRouter:
                     websocket,
                     session,
                     request_id=start.request_id,
-                    profile=start.profile,
+                    profile=initial_profile,
+                    initial_fallback_reason=(
+                        "provider_unavailable"
+                        if initial_profile != start.profile
+                        else None
+                    ),
                     window_seconds=start.window_seconds,
                     fallback_profile=start.fallback_profile,
                     alternate=start.policy == "windowed_alternate",
@@ -809,6 +850,7 @@ async def _bridge_v2(
     *,
     request_id: UUID,
     profile: str,
+    initial_fallback_reason: str | None = None,
     window_seconds: int = 90,
     fallback_profile: str | None = None,
     alternate: bool = False,
@@ -841,7 +883,9 @@ async def _bridge_v2(
     accepted_chunks = 0
     accepted_bytes = 0
     usage_final_sent = False
-    switch_count = 0
+    switch_count = (
+        1 if fallback_profile is not None and profile == fallback_profile else 0
+    )
     rotation_count = 0
     max_switches = 8
     last_switch_at: float | None = None
@@ -920,6 +964,7 @@ async def _bridge_v2(
             "lane_id": lane_id,
             "profile": profile,
             "provider_ref": active_profile,
+            "fallback_reason": initial_fallback_reason,
             "sequence": 0,
             "max_chunk_bytes": max_chunk_bytes,
             "max_unacknowledged_chunks": max_unacknowledged_chunks,
@@ -1071,9 +1116,15 @@ async def _bridge_v2(
                         }
                     )
                     continue
-                if record_failure is not None:
+                eligible_provider_failure = event.code in {
+                    "provider_connection_closed",
+                    "provider_down",
+                    "provider_unavailable",
+                }
+                if record_failure is not None and eligible_provider_failure:
                     await _invoke_failure(record_failure, active_profile)
-                switch_count += 1
+                if eligible_provider_failure:
+                    switch_count += 1
                 if switch_count > max_switches:
                     await send_usage_final("provider_failed")
                     output_sequence += 1
@@ -1108,7 +1159,12 @@ async def _bridge_v2(
                         "failure_stage": "provider_stream",
                     }
                 )
-                if fallback_profile is None or open_profile is None:
+                if (
+                    fallback_profile is None
+                    or open_profile is None
+                    or active_profile == fallback_profile
+                    or not eligible_provider_failure
+                ):
                     await send_usage_final("provider_failed")
                     output_sequence += 1
                     await send_event(

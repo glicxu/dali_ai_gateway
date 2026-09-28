@@ -256,8 +256,6 @@ class OpenAIProvider:
         audio_sample_rate_hz: int,
         outputs: frozenset[str] = frozenset({"target_transcript", "translated_audio"}),
     ) -> OpenAIRealtimeTranslationSession:
-        if "source_transcript" in outputs:
-            raise REQUEST_INVALID
         session = OpenAIRealtimeTranslationSession(
             api_key=self._api_key,
             url=_specialized_realtime_url(
@@ -343,6 +341,16 @@ class OpenAIRealtimeSession:
             prompt = "\n".join(part for part in prompt_parts if part)
             if prompt:
                 transcription["prompt"] = prompt
+            turn_detection: dict[str, object] | None = (
+                None
+                if self._model in {"gpt-live-transcribe", "gpt-realtime-whisper"}
+                else {
+                    "type": "server_vad",
+                    "threshold": 0.5,
+                    "prefix_padding_ms": 300,
+                    "silence_duration_ms": 500,
+                }
+            )
             await self._send(
                 {
                     "type": "session.update",
@@ -352,7 +360,7 @@ class OpenAIRealtimeSession:
                             "input": {
                                 "format": {"type": "audio/pcm", "rate": 24000},
                                 "transcription": transcription,
-                                "turn_detection": None,
+                                "turn_detection": turn_detection,
                                 "noise_reduction": {"type": "near_field"},
                             }
                         },
@@ -604,6 +612,8 @@ class OpenAIRealtimeTranslationSession:
             )
 
     def _selected(self, event: RealtimeEvent) -> bool:
+        if event.type.startswith("transcript."):
+            return "source_transcript" in self._outputs
         if event.type.startswith("translation.audio."):
             return "translated_audio" in self._outputs
         if event.type.startswith("translation."):
@@ -645,6 +655,40 @@ def _translation_language(value: str) -> str:
 
 def _translation_event(value: dict[str, object]) -> RealtimeEvent | None:
     event_type = str(value.get("type") or "")
+    if event_type == "session.input_transcript.delta":
+        text = str(value.get("delta") or "")
+        return (
+            RealtimeEvent(
+                "transcript.delta",
+                text=text,
+                # Live translation transcript events are one continuous stream.
+                # OpenAI does not provide an item ID or a turn-completed event,
+                # so keep one stable identity for the provider session.  The
+                # Gateway window ID scopes this identity across rotations.
+                item_id=_optional_str(value.get("item_id") or value.get("response_id"))
+                or "source-stream",
+            )
+            if text
+            else None
+        )
+    if event_type in {
+        "session.input_transcript.completed",
+        "session.input_transcript.done",
+        "session.input_transcript.final",
+    }:
+        text = str(
+            value.get("transcript") or value.get("text") or value.get("delta") or ""
+        ).strip()
+        return (
+            RealtimeEvent(
+                "transcript.final",
+                text=text,
+                item_id=_optional_str(value.get("item_id") or value.get("response_id"))
+                or "source-stream",
+            )
+            if text
+            else None
+        )
     if event_type in {
         "session.output_audio.delta",
         "response.output_audio.delta",
@@ -654,7 +698,8 @@ def _translation_event(value: dict[str, object]) -> RealtimeEvent | None:
             RealtimeEvent(
                 "translation.audio.delta",
                 audio=audio,
-                item_id=_optional_str(value.get("item_id") or value.get("response_id")),
+                item_id=_optional_str(value.get("item_id") or value.get("response_id"))
+                or "translation-stream",
                 content_type="audio/pcm",
                 sample_rate_hz=24000,
                 channels=1,
@@ -669,7 +714,8 @@ def _translation_event(value: dict[str, object]) -> RealtimeEvent | None:
     }:
         return RealtimeEvent(
             "translation.audio.final",
-            item_id=_optional_str(value.get("item_id") or value.get("response_id")),
+            item_id=_optional_str(value.get("item_id") or value.get("response_id"))
+            or "translation-stream",
             content_type="audio/pcm",
             sample_rate_hz=24000,
             channels=1,
@@ -693,7 +739,8 @@ def _translation_event(value: dict[str, object]) -> RealtimeEvent | None:
             RealtimeEvent(
                 "translation.delta",
                 text=text,
-                item_id=_optional_str(value.get("item_id") or value.get("response_id")),
+                item_id=_optional_str(value.get("item_id") or value.get("response_id"))
+                or "translation-stream",
             )
             if text
             else None
@@ -706,7 +753,8 @@ def _translation_event(value: dict[str, object]) -> RealtimeEvent | None:
             RealtimeEvent(
                 "translation.final",
                 text=text,
-                item_id=_optional_str(value.get("item_id") or value.get("response_id")),
+                item_id=_optional_str(value.get("item_id") or value.get("response_id"))
+                or "translation-stream",
             )
             if text
             else None
