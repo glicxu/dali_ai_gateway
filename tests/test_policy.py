@@ -222,19 +222,27 @@ def test_interprete_has_an_independent_disabled_workload_and_profiles() -> None:
         for name in grant.profiles
     )
     assert settings.caller_limits()["interpreter_server_ai"] == 2
-    assert generation.profiles["interprete.transcription.realtime"].provider == "gemini"
+    assert generation.profiles["interprete.transcription.realtime"].provider == "openai"
     assert (
         generation.profiles["interprete.transcription.realtime"].model
-        == "gemini-3.5-transcribe-live"
+        == "gpt-4o-mini-transcribe"
     )
-    assert generation.profiles["interprete.translation.realtime"].provider == "gemini"
+    assert generation.profiles["interprete.translation.realtime"].provider == "openai"
     assert (
         generation.profiles["interprete.translation.realtime"].model
-        == "gemini-3.5-live-translate-preview"
+        == "gpt-realtime-translate"
     )
     assert (
         generation.profiles["interprete.translation.realtime.openai"].provider
         == "openai"
+    )
+    assert (
+        generation.profiles["interprete.transcription.realtime.gemini"].provider
+        == "gemini"
+    )
+    assert (
+        generation.profiles["interprete.translation.realtime.gemini"].provider
+        == "gemini"
     )
 
 

@@ -13,6 +13,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from app.api.routes import _send_realtime_event
 from app.core.config import DEFAULT_WORKLOAD_GRANTS, Settings
+from app.core.errors import PROVIDER_NOT_CONFIGURED, PROVIDER_UNAVAILABLE
 from app.core.security import WorkloadPrincipal
 from app.core.usage_delivery import UsageDelivery
 from app.main import create_app
@@ -1096,6 +1097,156 @@ def test_realtime_v2_automatically_fails_over_at_provider_error() -> None:
     assert len(sink.measurements) == 1
     assert sink.measurements[0].fallback_count == 1
     assert sink.measurements[0].route_id == "gemini.gemini-3.5-live-translate-preview"
+
+
+def test_interpreter_realtime_uses_gemini_when_openai_cannot_open() -> None:
+    class UnavailableOpenAi(FakeProvider):
+        async def open_realtime_translation(self, **kwargs):
+            raise PROVIDER_UNAVAILABLE
+
+    gemini = FakeProvider()
+    grant = copy.deepcopy(DEFAULT_WORKLOAD_GRANTS["interpreter_server_ai"])
+    grant["enabled"] = True
+    settings = Settings(
+        service_tokens_json=SecretStr(
+            '{"interpreter_server_ai":"interprete-test-token"}'
+        ),
+        workload_grants_json=json.dumps({"interpreter_server_ai": grant}),
+        caller_limits_json='{"interpreter_server_ai":1}',
+        legacy_auth_workload_ids_json='["interpreter_server_ai"]',
+    )
+    application = create_app(
+        settings, providers={"openai": UnavailableOpenAi(), "gemini": gemini}
+    )
+    sink = _CaptureUsageSink()
+    application.state.container.service.usage_delivery = UsageDelivery(
+        sink, max_attempts=1, retry_delay_seconds=0
+    )
+    headers = {
+        "Authorization": "Bearer interprete-test-token",
+        "X-Dali-Caller": "interpreter_server_ai",
+    }
+    with TestClient(application) as client:
+        with client.websocket_connect(
+            "/ai/v2/realtime/translations", headers=headers
+        ) as socket:
+            socket.send_json(
+                {
+                    "type": "session.start",
+                    "request_id": str(uuid4()),
+                    "product": "interprete",
+                    "profile": "interprete.translation.realtime",
+                    "fallback_profile": "interprete.translation.realtime.gemini",
+                    "policy": "windowed_failover",
+                    "target_language": "es",
+                }
+            )
+            ready = socket.receive_json()
+            assert ready["type"] == "session.ready"
+            assert ready["fallback_reason"] == "provider_unavailable"
+            socket.send_json({"type": "session.stop"})
+            assert socket.receive_json()["type"] == "usage.final"
+            assert socket.receive_json()["type"] == "session.closed"
+    assert sink.measurements[0].fallback_count == 1
+    assert sink.measurements[0].route_id == "gemini.gemini-3.5-live-translate-preview"
+
+
+def test_interpreter_realtime_does_not_fallback_for_missing_provider_configuration() -> (
+    None
+):
+    class UnconfiguredOpenAi(FakeProvider):
+        async def open_realtime_translation(self, **kwargs):
+            raise PROVIDER_NOT_CONFIGURED
+
+    gemini = FakeProvider()
+    grant = copy.deepcopy(DEFAULT_WORKLOAD_GRANTS["interpreter_server_ai"])
+    grant["enabled"] = True
+    settings = Settings(
+        service_tokens_json=SecretStr(
+            '{"interpreter_server_ai":"interprete-test-token"}'
+        ),
+        workload_grants_json=json.dumps({"interpreter_server_ai": grant}),
+        caller_limits_json='{"interpreter_server_ai":1}',
+        legacy_auth_workload_ids_json='["interpreter_server_ai"]',
+    )
+    application = create_app(
+        settings, providers={"openai": UnconfiguredOpenAi(), "gemini": gemini}
+    )
+    headers = {
+        "Authorization": "Bearer interprete-test-token",
+        "X-Dali-Caller": "interpreter_server_ai",
+    }
+    with TestClient(application) as client:
+        with client.websocket_connect(
+            "/ai/v2/realtime/translations", headers=headers
+        ) as socket:
+            socket.send_json(
+                {
+                    "type": "session.start",
+                    "request_id": str(uuid4()),
+                    "product": "interprete",
+                    "profile": "interprete.translation.realtime",
+                    "fallback_profile": "interprete.translation.realtime.gemini",
+                    "policy": "windowed_failover",
+                    "target_language": "es",
+                }
+            )
+            assert socket.receive_json()["error"]["code"] == (
+                "ai_gateway_provider_not_configured"
+            )
+    assert gemini.realtime_translation_outputs == []
+
+
+def test_interpreter_realtime_does_not_fallback_for_provider_request_error() -> None:
+    class RequestErrorSession(_ErrorOnceSession):
+        async def next_event(self) -> RealtimeEvent:
+            await self._appended.wait()
+            return RealtimeEvent("error", code="provider_realtime_error")
+
+    class RequestErrorProvider(FakeProvider):
+        async def open_realtime_translation(self, **kwargs):
+            self.realtime_translation_outputs.append(kwargs["outputs"])
+            return RequestErrorSession()
+
+    openai = RequestErrorProvider()
+    gemini = FakeProvider()
+    grant = copy.deepcopy(DEFAULT_WORKLOAD_GRANTS["interpreter_server_ai"])
+    grant["enabled"] = True
+    settings = Settings(
+        service_tokens_json=SecretStr(
+            '{"interpreter_server_ai":"interprete-test-token"}'
+        ),
+        workload_grants_json=json.dumps({"interpreter_server_ai": grant}),
+        caller_limits_json='{"interpreter_server_ai":1}',
+        legacy_auth_workload_ids_json='["interpreter_server_ai"]',
+    )
+    application = create_app(settings, providers={"openai": openai, "gemini": gemini})
+    headers = {
+        "Authorization": "Bearer interprete-test-token",
+        "X-Dali-Caller": "interpreter_server_ai",
+    }
+    with TestClient(application) as client:
+        with client.websocket_connect(
+            "/ai/v2/realtime/translations", headers=headers
+        ) as socket:
+            socket.send_json(
+                {
+                    "type": "session.start",
+                    "request_id": str(uuid4()),
+                    "product": "interprete",
+                    "profile": "interprete.translation.realtime",
+                    "fallback_profile": "interprete.translation.realtime.gemini",
+                    "policy": "windowed_failover",
+                    "target_language": "es",
+                }
+            )
+            assert socket.receive_json()["type"] == "session.ready"
+            socket.send_json({"type": "audio.append", "sequence": 1, "audio": "AQI="})
+            events = [socket.receive_json() for _ in range(4)]
+            assert any(event["type"] == "window.failed" for event in events)
+            assert any(event["type"] == "session.closed" for event in events)
+            assert not any(event["type"] == "provider.switched" for event in events)
+    assert gemini.realtime_translation_outputs == []
 
 
 def test_realtime_v2_rejects_oversized_audio_before_provider_append() -> None:

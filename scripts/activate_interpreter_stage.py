@@ -15,8 +15,10 @@ INTERPRETER_PROFILES = (
     "interprete.translation.text",
     "interprete.transcription.batch",
     "interprete.transcription.realtime",
+    "interprete.transcription.realtime.gemini",
     "interprete.translation.realtime",
     "interprete.translation.realtime.openai",
+    "interprete.translation.realtime.gemini",
     "interprete.speech.standard",
 )
 INTERPRETER_CAPABILITIES = (
@@ -93,7 +95,10 @@ def activate(
         raise ValueError("Interpreter workload product boundary changed")
     configured_profiles = frozenset(grant.get("profiles", []))
     expected_profiles = set(INTERPRETER_PROFILES)
-    previous_profiles = expected_profiles - {"interprete.translation.realtime.openai"}
+    previous_profiles = expected_profiles - {
+        "interprete.transcription.realtime.gemini",
+        "interprete.translation.realtime.gemini",
+    }
     if configured_profiles not in {
         frozenset(expected_profiles),
         frozenset(previous_profiles),
