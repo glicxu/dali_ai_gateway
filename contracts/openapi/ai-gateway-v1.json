@@ -223,6 +223,11 @@
             "title": "Max Instructions Characters",
             "type": "integer"
           },
+          "max_speakers": {
+            "default": 1,
+            "title": "Max Speakers",
+            "type": "integer"
+          },
           "model": {
             "title": "Model",
             "type": "string"
@@ -261,6 +266,27 @@
         "title": "SpeechCapabilities",
         "type": "object"
       },
+      "SpeechSpeaker": {
+        "additionalProperties": false,
+        "properties": {
+          "speaker": {
+            "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$",
+            "title": "Speaker",
+            "type": "string"
+          },
+          "voice": {
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "title": "Voice",
+            "type": "string"
+          }
+        },
+        "required": [
+          "speaker",
+          "voice"
+        ],
+        "title": "SpeechSpeaker",
+        "type": "object"
+      },
       "SpeechSynthesisRequest": {
         "additionalProperties": false,
         "properties": {
@@ -277,10 +303,17 @@
             "title": "Configuration Id"
           },
           "input": {
-            "maxLength": 4096,
-            "minLength": 1,
-            "title": "Input",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input"
           },
           "instructions": {
             "default": "",
@@ -303,20 +336,85 @@
             "title": "Request Id",
             "type": "string"
           },
+          "speakers": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SpeechSpeaker"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speakers"
+          },
+          "turns": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SpeechTurn"
+                },
+                "maxItems": 2000,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turns"
+          },
           "voice": {
-            "pattern": "^[A-Za-z0-9_-]{1,64}$",
-            "title": "Voice",
-            "type": "string"
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Voice"
           }
         },
         "required": [
           "request_id",
           "product",
-          "profile",
-          "input",
-          "voice"
+          "profile"
         ],
         "title": "SpeechSynthesisRequest",
+        "type": "object"
+      },
+      "SpeechTurn": {
+        "additionalProperties": false,
+        "properties": {
+          "speaker": {
+            "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$",
+            "title": "Speaker",
+            "type": "string"
+          },
+          "style": {
+            "default": "",
+            "maxLength": 1000,
+            "title": "Style",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "speaker",
+          "text"
+        ],
+        "title": "SpeechTurn",
         "type": "object"
       },
       "StructuredOutput": {

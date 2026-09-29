@@ -74,14 +74,45 @@ class AudioTranscriptionResponse(StrictModel):
     usage: UsageMeasurement = Field(default_factory=UsageMeasurement)
 
 
+class SpeechTurn(StrictModel):
+    speaker: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+    text: str = Field(min_length=1, max_length=4_096)
+    style: str = Field(default="", max_length=1_000)
+
+
+class SpeechSpeaker(StrictModel):
+    speaker: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+    voice: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+
+
 class SpeechSynthesisRequest(StrictModel):
     request_id: UUID
     product: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,63}$")
     profile: str = Field(pattern=r"^[a-z][a-z0-9_.-]{2,127}$")
-    input: str = Field(min_length=1, max_length=4_096)
-    voice: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    input: str | None = Field(default=None, min_length=1, max_length=20_000)
+    voice: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    turns: list[SpeechTurn] | None = Field(default=None, min_length=1, max_length=2_000)
+    speakers: list[SpeechSpeaker] | None = Field(default=None, min_length=2, max_length=2)
     instructions: str = Field(default="", max_length=1_000)
     configuration_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+    @model_validator(mode="after")
+    def exactly_one_speech_mode(self) -> "SpeechSynthesisRequest":
+        single = self.input is not None or self.voice is not None
+        dialogue = self.turns is not None or self.speakers is not None
+        if single == dialogue:
+            raise ValueError("choose either single-speaker input or multi-speaker turns")
+        if single and (self.input is None or self.voice is None):
+            raise ValueError("single-speaker input and voice are both required")
+        if dialogue:
+            if self.turns is None or self.speakers is None:
+                raise ValueError("multi-speaker turns and speakers are both required")
+            configured = {item.speaker for item in self.speakers}
+            if len(configured) != 2 or any(turn.speaker not in configured for turn in self.turns):
+                raise ValueError("multi-speaker turns must use exactly two configured speakers")
+            if sum(len(turn.text) for turn in self.turns) > 20_000:
+                raise ValueError("multi-speaker text exceeds the request limit")
+        return self
 
 
 class SpeechCapabilities(StrictModel):
@@ -94,6 +125,7 @@ class SpeechCapabilities(StrictModel):
     max_instructions_characters: int = 1_000
     max_input_bytes: int | None
     instructions_semantics: Literal["best_effort"] = "best_effort"
+    max_speakers: int = 1
 
 
 class RealtimeStart(StrictModel):

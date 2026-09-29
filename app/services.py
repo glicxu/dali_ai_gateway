@@ -521,7 +521,9 @@ class GatewayService:
             provider=profile.provider,
             model=profile.model,
             voices=sorted(profile.voice_routes) if profile.voice_routes else None,
+            max_input_characters=(20_000 if profile.provider == "gemini" else 4_096),
             max_input_bytes=profile.max_input_bytes,
+            max_speakers=(2 if profile.provider == "gemini" else 1),
         )
 
     async def synthesize_speech(
@@ -541,15 +543,31 @@ class GatewayService:
             and request.configuration_id != configuration_id
         ):
             raise SPEECH_CONFIGURATION_CHANGED
+        request_text = (request.input if request.input is not None else
+                        "\n".join(
+                            f"{turn.speaker}:{turn.style}:{turn.text}"
+                            for turn in request.turns or []))
+        if len(request_text) > (20_000 if profile.provider == "gemini" else 4_096):
+            raise REQUEST_INVALID
         if (
             profile.max_input_bytes is not None
-            and len((request.input + request.instructions).encode("utf-8"))
+            and len((request_text + request.instructions).encode("utf-8"))
             > profile.max_input_bytes
         ):
             raise REQUEST_INVALID
         voice = request.voice
-        if profile.voice_routes is not None:
-            voice = profile.voice_routes.get(request.voice, "")
+        routed_speakers = None
+        if request.speakers is not None:
+            routed_speakers = []
+            for speaker in request.speakers:
+                routed = speaker.voice
+                if profile.voice_routes is not None:
+                    routed = profile.voice_routes.get(speaker.voice, "")
+                    if not routed:
+                        raise PROFILE_NOT_ALLOWED
+                routed_speakers.append({"speaker": speaker.speaker, "voice": routed})
+        elif profile.voice_routes is not None:
+            voice = profile.voice_routes.get(request.voice or "", "")
             if not voice:
                 raise PROFILE_NOT_ALLOWED
         route_id = f"{profile.provider}.{profile.model}"
@@ -565,12 +583,23 @@ class GatewayService:
             ):
                 async with self.circuits.call(route_id):
                     await self.claim_execution(request.request_id, "speech_synthesis")
-                    result = await provider.synthesize(
-                        model=profile.model,
-                        input_text=request.input,
-                        voice=voice,
-                        instructions=request.instructions,
-                    )
+                    if request.turns is not None:
+                        synthesize_dialogue = getattr(provider, "synthesize_dialogue", None)
+                        if synthesize_dialogue is None or routed_speakers is None:
+                            raise PROFILE_NOT_ALLOWED
+                        result = await synthesize_dialogue(
+                            model=profile.model,
+                            turns=[turn.model_dump() for turn in request.turns],
+                            speakers=routed_speakers,
+                            instructions=request.instructions,
+                        )
+                    else:
+                        result = await provider.synthesize(
+                            model=profile.model,
+                            input_text=request.input,
+                            voice=voice,
+                            instructions=request.instructions,
+                        )
         except GatewayError:
             raise
         except Exception as error:

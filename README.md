@@ -65,7 +65,10 @@ shared `secret.key_store` table through a narrowly scoped database identity.
 Credential rows may contain either a plain secret or the existing provider JSON
 object (`OPENAI_API_KEY` or `GEMINI_API_KEY`); JSON-string-wrapped forms are
 decoded without logging their contents. Local development may instead use
-provider-specific environment variables.
+provider-specific environment variables. `AI_GATEWAY_GEMINI_API_KEYS_JSON` may
+hold up to four unique Gemini keys in addition to the primary key. Speech calls
+rotate across that pool and try the next key only after a definite HTTP 429.
+Use keys from distinct projects when the intent is independent project quota.
 Service tokens remain environment-managed. Each configured legacy caller must
 have exactly one enabled workload grant. With no provider credentials, or with
 a missing provider required by an enabled deployment profile, the service
@@ -90,6 +93,9 @@ uses a string `state_key` partition key and TTL on `expires_at`. Circuit records
 are content-free and admission uses atomic bounded slots across replicas.
 
 ## Local setup
+
+The [Dali Audio app design](docs/dali_audio_app_design.md) describes the planned
+text-to-audio product, voice and conversion choices, and shared Dali accounts.
 
 The [Dali Audio technical spike](docs/dali_audio_technical_spike.md) uses Dali
 Chat to exercise stateless speech discovery, configured voice aliases,

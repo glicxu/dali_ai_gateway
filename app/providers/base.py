@@ -85,6 +85,15 @@ class SpeechSynthesisProvider(Protocol):
         instructions: str,
     ) -> SpeechResult: ...
 
+    async def synthesize_dialogue(
+        self,
+        *,
+        model: str,
+        turns: list[dict[str, str]],
+        speakers: list[dict[str, str]],
+        instructions: str,
+    ) -> SpeechResult: ...
+
 
 class MediaAnalysisProvider(Protocol):
     async def analyze_media(

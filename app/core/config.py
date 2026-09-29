@@ -456,6 +456,7 @@ class Settings(BaseSettings):
         "https://generativelanguage.googleapis.com/v1beta"
     )
     gemini_api_key: SecretStr | None = None
+    gemini_api_keys_json: SecretStr = SecretStr("[]")
     ollama_base_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:11434")
     ollama_enabled: bool = False
     request_timeout_seconds: float = Field(default=60, gt=0, le=120)
@@ -580,6 +581,23 @@ class Settings(BaseSettings):
     def caller_limits(self) -> dict[str, int]:
         value = _json_object(self.caller_limits_json)
         return {str(caller): max(1, int(limit)) for caller, limit in value.items()}
+
+    def gemini_api_keys(self) -> tuple[str, ...]:
+        raw = self.gemini_api_keys_json.get_secret_value()
+        try:
+            decoded = json.loads(raw)
+        except (TypeError, ValueError) as error:
+            raise ValueError("Gemini API key pool must be a JSON list") from error
+        if not isinstance(decoded, list):
+            raise ValueError("Gemini API key pool must be a JSON list")
+        values = tuple(
+            item.strip() for item in decoded if isinstance(item, str) and item.strip()
+        )
+        if len(values) != len(decoded):
+            raise ValueError("Gemini API key pool must contain non-empty strings")
+        if len(values) > 4 or len(set(values)) != len(values):
+            raise ValueError("Gemini API key pool requires at most four unique keys")
+        return values
 
     def provider_circuit_disabled_routes(self) -> frozenset[str]:
         value = _json_string_list(self.provider_circuit_disabled_routes_json)

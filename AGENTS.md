@@ -1,5 +1,10 @@
 # Dali AI Gateway Repository Instructions
 
+Phase 2 consolidation: [reference reconciliation](docs/phase2_reference_reconciliation.md)
+records 2026-09-15 Classroom/Audio deployments, policy drift, capacity evidence
+limits and rollback boundaries. Do not use historical sample policy as live state
+or infer a certified Host reserve. No Gateway configuration was changed.
+
 ## Mission
 
 Provide a private, stateless, vendor-neutral AI data plane for Dali product
@@ -26,9 +31,14 @@ services, including low-latency realtime speech use cases.
 
 ## Quality gate
 
+P3-01 (2026-09-15): generic bounded strict-schema text output is implemented
+locally. See `docs/structured_output.md` for its limited subset and explicit
+OpenAI profile opt-in. No live DaliJob grants/profile/capacity changes are made.
+181 tests, compilation and OpenAPI freshness pass. Product schemas remain owned
+by product services; do not add DaliJob-specific models to Gateway.
+
 ```powershell
 python -m compileall -q app tests
 python -m pytest -q
 python -m scripts.export_openapi --check
 ```
-

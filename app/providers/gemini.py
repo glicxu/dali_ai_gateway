@@ -6,6 +6,7 @@ import base64
 import binascii
 import io
 import json
+import logging
 import wave
 from typing import Any, Awaitable, Callable, Literal
 from urllib.parse import urlencode, urlsplit, urlunsplit
@@ -13,7 +14,7 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 import httpx
 from websockets.asyncio.client import connect as websocket_connect
 
-from app.core.errors import PROVIDER_UNAVAILABLE
+from app.core.errors import PROVIDER_RATE_LIMITED, PROVIDER_UNAVAILABLE
 from app.models import UsageMeasurement
 from app.providers.base import (
     MediaResult,
@@ -24,6 +25,20 @@ from app.providers.base import (
 )
 
 _LIVE_TRANSLATE_COMMIT_DRAIN_SECONDS = 1.5
+LOGGER = logging.getLogger("uvicorn.error")
+
+
+def _log_provider_failure(operation: str, error: Exception) -> None:
+    """Record content-free transport diagnostics without provider payloads."""
+    status_code = None
+    if isinstance(error, httpx.HTTPStatusError):
+        status_code = error.response.status_code
+    LOGGER.warning(
+        "provider_failure provider=gemini operation=%s kind=%s status=%s",
+        operation,
+        type(error).__name__,
+        status_code if status_code is not None else "none",
+    )
 
 
 class GeminiProvider:
@@ -31,6 +46,7 @@ class GeminiProvider:
         self,
         *,
         api_key: str,
+        api_keys: tuple[str, ...] = (),
         base_url: str,
         timeout_seconds: float,
         realtime_session_max_seconds: float = 9 * 60,
@@ -38,6 +54,8 @@ class GeminiProvider:
         connect: Callable[..., Awaitable[Any]] = websocket_connect,
     ) -> None:
         self._api_key = api_key
+        self._speech_api_keys = tuple(dict.fromkeys((api_key, *api_keys)))
+        self._speech_key_cursor = 0
         self._base_url = base_url.rstrip("/")
         self._client = client or httpx.AsyncClient(timeout=timeout_seconds)
         self._owns_client = client is None
@@ -224,34 +242,116 @@ class GeminiProvider:
             if instructions.strip()
             else input_text
         )
+        payload = {
+            "model": model,
+            "input": spoken_input,
+            "response_format": {"type": "audio"},
+            "generation_config": {"speech_config": [{"voice": voice}]},
+        }
         try:
-            response = await self._client.post(
-                f"{self._base_url}/interactions",
-                headers={
-                    "x-goog-api-key": self._api_key,
-                    "Api-Revision": "2026-05-20",
-                },
-                json={
-                    "model": model,
-                    "input": spoken_input,
-                    "response_format": {
-                        "type": "audio",
-                    },
-                    "generation_config": {"speech_config": [{"voice": voice}]},
-                },
+            response = await self._post_speech(
+                operation="speech", payload=payload
             )
-            response.raise_for_status()
             value = response.json()
             if not isinstance(value, dict):
                 raise ValueError("Gemini returned an invalid interaction.")
             output_audio, content_type = _interaction_audio(value)
         except (httpx.HTTPError, ValueError, TypeError, binascii.Error) as error:
+            if not isinstance(error, httpx.HTTPStatusError):
+                _log_provider_failure("speech", error)
             raise PROVIDER_UNAVAILABLE from error
         return SpeechResult(
             audio=output_audio,
             content_type=content_type,
             usage=_interaction_usage(value),
         )
+
+    async def synthesize_dialogue(
+        self,
+        *,
+        model: str,
+        turns: list[dict[str, str]],
+        speakers: list[dict[str, str]],
+        instructions: str,
+    ) -> SpeechResult:
+        preamble = instructions.strip()
+        lines = []
+        for turn in turns:
+            style = f" ({turn['style']})" if turn.get("style") else ""
+            lines.append(f"{turn['speaker']}{style}: {turn['text']}")
+        transcript = "\n".join(lines)
+        spoken_input = ("TTS the following conversation verbatim. Do not speak "
+                        "speaker names or parenthesized delivery instructions.")
+        if preamble:
+            spoken_input += f" {preamble}"
+        spoken_input += f"\n\n{transcript}"
+        payload = {
+            "model": model,
+            "input": spoken_input,
+            "response_format": {"type": "audio"},
+            "generation_config": {
+                "speech_config": [
+                    {"speaker": item["speaker"], "voice": item["voice"]}
+                    for item in speakers
+                ]
+            },
+        }
+        try:
+            response = await self._post_speech(
+                operation="speech_dialogue", payload=payload, timeout=240
+            )
+            value = response.json()
+            if not isinstance(value, dict):
+                raise ValueError("Gemini returned an invalid interaction.")
+            output_audio, content_type = _interaction_audio(value)
+        except (httpx.HTTPError, ValueError, TypeError, binascii.Error) as error:
+            if not isinstance(error, httpx.HTTPStatusError):
+                _log_provider_failure("speech_dialogue", error)
+            raise PROVIDER_UNAVAILABLE from error
+        return SpeechResult(
+            audio=output_audio,
+            content_type=content_type,
+            usage=_interaction_usage(value),
+        )
+
+    async def _post_speech(
+        self,
+        *,
+        operation: str,
+        payload: dict[str, object],
+        timeout: float | None = None,
+    ) -> httpx.Response:
+        keys = self._next_speech_keys()
+        last_rate_limit: httpx.HTTPStatusError | None = None
+        for api_key in keys:
+            try:
+                kwargs: dict[str, object] = {
+                    "headers": {
+                        "x-goog-api-key": api_key,
+                        "Api-Revision": "2026-05-20",
+                    },
+                    "json": payload,
+                }
+                if timeout is not None:
+                    kwargs["timeout"] = timeout
+                response = await self._client.post(
+                    f"{self._base_url}/interactions", **kwargs
+                )
+                response.raise_for_status()
+                return response
+            except httpx.HTTPStatusError as error:
+                _log_provider_failure(operation, error)
+                if error.response.status_code != 429:
+                    raise
+                last_rate_limit = error
+        if last_rate_limit is not None:
+            raise PROVIDER_RATE_LIMITED from last_rate_limit
+        raise PROVIDER_UNAVAILABLE
+
+    def _next_speech_keys(self) -> tuple[str, ...]:
+        start = self._speech_key_cursor % len(self._speech_api_keys)
+        self._speech_key_cursor += 1
+        return self._speech_api_keys[start:] + self._speech_api_keys[:start]
 
     async def analyze_media(
         self,

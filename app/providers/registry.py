@@ -196,6 +196,7 @@ def _providers_with_credentials(
     if credentials.gemini:
         providers["gemini"] = GeminiProvider(
             api_key=credentials.gemini,
+            api_keys=settings.gemini_api_keys(),
             base_url=str(settings.gemini_base_url),
             timeout_seconds=settings.request_timeout_seconds,
             realtime_session_max_seconds=(settings.gemini_realtime_session_max_seconds),

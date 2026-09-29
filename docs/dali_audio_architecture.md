@@ -7,6 +7,10 @@ and Platform account and billing responsibilities.
 
 ## 1. Decision
 
+The [Dali Audio app design](dali_audio_app_design.md) defines text/PDF input,
+free device voices, paid AI voices, live reading, background output, and the
+standard Dali account experience on top of these service boundaries.
+
 Build `dali_audio_server` as both the Dali Audio app backend and the reusable
 narration service. Do not introduce a separate `audio_gateway` deployment.
 Keep app-facing endpoints, service-facing endpoints, and narration logic as

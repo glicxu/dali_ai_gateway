@@ -68,6 +68,13 @@ REQUEST_INVALID = GatewayError(
     "ai_gateway_request_invalid",
     "The AI request is invalid.",
 )
+PROVIDER_RATE_LIMITED = GatewayError(
+    429,
+    "ai_gateway_provider_rate_limited",
+    "The AI provider request limit has been reached.",
+    True,
+    3_600_000,
+)
 SPEECH_CONFIGURATION_CHANGED = GatewayError(
     409,
     "ai_gateway_speech_configuration_changed",

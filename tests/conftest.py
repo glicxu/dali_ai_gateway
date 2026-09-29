@@ -70,6 +70,7 @@ class FakeProvider:
     transcribed_audio: list[bytes] = field(default_factory=list)
     analyzed_media: list[tuple[str, bytes]] = field(default_factory=list)
     synthesized_text: list[str] = field(default_factory=list)
+    synthesized_dialogues: list[list[dict[str, str]]] = field(default_factory=list)
     realtime_translation_outputs: list[frozenset[str]] = field(default_factory=list)
     probe_calls: int = 0
     probe_error: bool = False
@@ -107,6 +108,14 @@ class FakeProvider:
             audio=b"RIFF-test-audio",
             content_type="audio/wav",
             usage=UsageMeasurement(input_tokens=4, output_tokens=8),
+        )
+
+    async def synthesize_dialogue(self, **kwargs) -> SpeechResult:
+        self.synthesized_dialogues.append(kwargs["turns"])
+        return SpeechResult(
+            audio=b"RIFF-test-dialogue",
+            content_type="audio/wav",
+            usage=UsageMeasurement(input_tokens=7, output_tokens=16),
         )
 
     async def open_realtime(self, **kwargs) -> FakeRealtimeSession:
