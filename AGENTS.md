@@ -1,5 +1,16 @@
 # Dali AI Gateway Repository Instructions
 
+Audio per-section routing audit (2026-10-01): immediately before a
+multi-speaker provider call, Gateway now writes one content-free record per
+turn containing the opaque request/section index, provider/model/profile and
+configuration, stable speaker alias, requested Audio voice alias, final
+provider voice, instruction/style SHA-256 and lengths, and text length. It does
+not log instructions, styles, transcript text, account identity, credentials or
+provider payloads. This lets Audio distinguish a stale/frozen app choice from a
+Gateway route substitution. All 206 tests, compilation and OpenAPI freshness
+pass. The isolated Audio Gateway runs `20261001-section-voice-audit-v1`; no
+shared Gateway or production change was made.
+
 Phase 2 consolidation: [reference reconciliation](docs/phase2_reference_reconciliation.md)
 records 2026-09-15 Classroom/Audio deployments, policy drift, capacity evidence
 limits and rollback boundaries. Do not use historical sample policy as live state

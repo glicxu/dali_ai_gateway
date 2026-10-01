@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import logging
 import time
 from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
@@ -38,6 +40,9 @@ from app.models import (
 )
 from app.providers.base import RealtimeTranscriptionSession, SpeechResult
 from app.providers.registry import ProviderRegistry
+
+
+LOGGER = logging.getLogger("uvicorn.error")
 
 
 class AdmissionStore(Protocol):
@@ -587,6 +592,40 @@ class GatewayService:
                         synthesize_dialogue = getattr(provider, "synthesize_dialogue", None)
                         if synthesize_dialogue is None or routed_speakers is None:
                             raise PROFILE_NOT_ALLOWED
+                        requested_voices = {
+                            speaker.speaker: speaker.voice
+                            for speaker in request.speakers or []
+                        }
+                        provider_voices = {
+                            speaker["speaker"]: speaker["voice"]
+                            for speaker in routed_speakers
+                        }
+                        instruction_digest = hashlib.sha256(
+                            request.instructions.encode("utf-8")
+                        ).hexdigest()
+                        for index, turn in enumerate(request.turns):
+                            LOGGER.info(
+                                "provider_speech_section_dispatch "
+                                "request_id=%s section=%s provider=%s model=%s "
+                                "profile=%s configuration_id=%s speaker=%s "
+                                "requested_voice=%s provider_voice=%s "
+                                "instruction_sha256=%s instruction_chars=%s "
+                                "style_sha256=%s style_chars=%s text_chars=%s",
+                                request.request_id,
+                                index,
+                                profile.provider,
+                                profile.model,
+                                request.profile,
+                                configuration_id,
+                                turn.speaker,
+                                requested_voices[turn.speaker],
+                                provider_voices[turn.speaker],
+                                instruction_digest,
+                                len(request.instructions),
+                                hashlib.sha256(turn.style.encode("utf-8")).hexdigest(),
+                                len(turn.style),
+                                len(turn.text),
+                            )
                         result = await synthesize_dialogue(
                             model=profile.model,
                             turns=[turn.model_dump() for turn in request.turns],
